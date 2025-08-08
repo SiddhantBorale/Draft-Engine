@@ -7,6 +7,10 @@
 #include <QColor>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QUndoStack>              
+#include <optional>                
+#include <QPointer>                
+#include <QVector>                 
 
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
@@ -21,6 +25,9 @@ public:
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
     void setCurrentLayer(int layer)        { m_layer = layer; }
     void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
+
+    // Undo stack injection (from MainWindow)
+    void setUndoStack(QUndoStack* s) { m_undo = s; }  // NEW
 
     // Persistence
     QJsonDocument saveToJson() const;
@@ -41,12 +48,37 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent       (QWheelEvent* e) override;
     void drawBackground   (QPainter* painter, const QRectF& rect) override;
+    void keyPressEvent    (QKeyEvent* e) override;                // NEW
 
 private:
+    // drawing helpers
     QPointF snap(const QPointF& scenePos) const;
     QPen   currentPen()   const { QPen p(m_color); p.setWidthF(m_lineWidth); return p; }
     QBrush currentBrush() const { return QBrush(m_fill); }
 
+    // --- Undo commands helpers (implemented in .cpp) --- NEW
+    void pushAddCmd(QGraphicsItem* item, const QString& text = "Add");    // NEW
+    void pushMoveCmd(QGraphicsItem* item, const QPointF& from, const QPointF& to,
+                     const QString& text = "Move");                        // NEW
+    void pushDeleteCmd(const QList<QGraphicsItem*>& items,
+                       const QString& text = "Delete");                    // NEW
+
+    // --- Handles (resize/rotate) --- NEW
+    struct Handle {
+        enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT } type;
+        QGraphicsRectItem* item { nullptr };
+    };
+    void createHandlesForSelected();   // NEW
+    void clearHandles();               // NEW
+    void layoutHandles();              // NEW
+    bool handleMousePress(const QPointF& scenePos, Qt::MouseButton btn);   // NEW
+    bool handleMouseMove (const QPointF& scenePos);                         // NEW
+    bool handleMouseRelease(const QPointF& scenePos);                       // NEW
+
+    QVector<QPointF> collectSnapPoints(QGraphicsItem* it) const;           // NEW
+    void updateSnapIndicator(const QPointF& p) const;                       // NEW
+
+private:
     QGraphicsScene* m_scene { nullptr };
     Tool   m_tool      { Tool::Select };
     QColor m_color     { Qt::black };        // stroke
@@ -64,4 +96,23 @@ private:
     // grid
     bool   m_showGrid { true };
     double m_gridSize { 25.0 };
+
+    // --- Undo --- NEW
+    QUndoStack* m_undo { nullptr };
+    QGraphicsItem* m_moveTarget { nullptr };     // for select-move tracking
+    QPointF        m_moveStartPos;               // start pos for move
+
+    // --- Snapping indicator --- NEW
+    mutable QGraphicsItemGroup* m_snapIndicator { nullptr };
+
+    // --- Handles state --- NEW
+    QVector<Handle> m_handles;
+    QGraphicsEllipseItem* m_rotDot { nullptr };
+    std::optional<Handle::Type> m_activeHandle;
+    QGraphicsItem* m_target { nullptr };
+    QPointF  m_handleStartScene;
+    QRectF   m_targetStartRect;
+    QLineF   m_targetStartLine;
+    qreal    m_targetStartRotation {0};
+    QPointF  m_targetCenter;
 };

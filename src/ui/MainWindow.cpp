@@ -26,11 +26,15 @@ MainWindow::MainWindow(QWidget* parent)
     setupMenus();
     setupLayersDock();
 
+    // 🔗 give the canvas the undo stack so it can push commands
+    m_canvas->setUndoStack(m_undo);
+
     // enable Spacebar pan via eventFilter
     qApp->installEventFilter(this);
 
     resize(1200, 800);
 }
+
 
 /* ─────────────────────────  Tool panel  ───────────────────────── */
 void MainWindow::setupToolPanel()
