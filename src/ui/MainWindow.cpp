@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "canvas/DrawingCanvas.h"
+#include "ui/RulerWidget.h"
 
 #include <QtWidgets>
 #include <QShortcut>
@@ -21,7 +22,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_net(new QNetworkAccessManager(this)),
       m_undo(new QUndoStack(this))
 {
-    setCentralWidget(m_canvas);
+    setCentralWidget(nullptr);
+    setupCentralWithRulers(); 
     setupToolPanel();
     setupMenus();
     setupLayersDock();
@@ -33,6 +35,30 @@ MainWindow::MainWindow(QWidget* parent)
     qApp->installEventFilter(this);
 
     resize(1200, 800);
+}
+
+void MainWindow::setupCentralWithRulers()
+{
+    auto* central = new QWidget(this);
+    auto* grid    = new QGridLayout(central);
+    grid->setContentsMargins(0,0,0,0);
+    grid->setSpacing(0);
+
+    auto* topRuler = new RulerWidget(m_canvas, RulerWidget::Orientation::Horizontal, central);
+    auto* leftRulr = new RulerWidget(m_canvas, RulerWidget::Orientation::Vertical, central);
+
+    // small corner square where rulers meet
+    auto* corner = new QWidget(central);
+    corner->setFixedSize(24,24);
+    corner->setAutoFillBackground(true);
+    corner->setBackgroundRole(QPalette::Base);
+
+    grid->addWidget(corner,   0,0);
+    grid->addWidget(topRuler, 0,1);
+    grid->addWidget(leftRulr, 1,0);
+    grid->addWidget(m_canvas, 1,1);
+
+    setCentralWidget(central);
 }
 
 
@@ -159,7 +185,8 @@ void MainWindow::setupLayersDock()
     // seed with Layer 0
     m_layerList->addItem("Layer 0");
     m_layerList->setCurrentRow(0);
-    connect(m_layerList, &QListWidget::currentRowChanged, this, &MainWindow::setCurrentLayerFromList);
+    connect(m_layerList, &QListWidget::currentRowChanged,
+            this, [this](int){ setCurrentLayerFromList(); });
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::addLayer);
     connect(delBtn, &QPushButton::clicked, this, &MainWindow::removeSelectedLayer);
 

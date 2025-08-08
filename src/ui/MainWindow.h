@@ -15,7 +15,6 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 protected:
-    // for Spacebar pan toggle
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private slots:
@@ -41,13 +40,14 @@ private slots:
     void undo();
     void redo();
 
-    // Layers
+    // Layers (list-based)
     void addLayer();
     void removeSelectedLayer();
     void setCurrentLayerFromList();
 
 private:
-    // helpers that build the UI
+    // UI builders
+    void setupCentralWithRulers();
     void setupToolPanel();
     void setupMenus();
     void setupLayersDock();
@@ -56,7 +56,7 @@ private:
     QNetworkAccessManager*  m_net    { nullptr };
     QUndoStack*             m_undo   { nullptr };
 
-    // simple layers UI (names only, no visibility/lock yet)
     QListWidget*            m_layerList { nullptr };
-    int                     m_nextLayerId { 1 }; // start with layer 0 existing
+    int                     m_nextLayerId { 1 };
 };
+

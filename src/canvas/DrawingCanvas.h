@@ -10,7 +10,10 @@
 #include <QUndoStack>              
 #include <optional>                
 #include <QPointer>                
-#include <QVector>                 
+#include <QVector>
+#include <QHash>   
+#include <QResizeEvent>
+
 
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
@@ -19,6 +22,11 @@ public:
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Settings
+    void setLayerVisibility(int layer, bool on);
+    void setLayerLocked(int layer, bool on);
+    bool isLayerVisible(int layer) const { return m_layerVisible.value(layer, true); }
+    bool isLayerLocked (int layer) const { return m_layerLocked .value(layer, false); }
+
     void setCurrentTool (Tool t)           { m_tool  = t; }
     void setCurrentColor(const QColor&  c) { m_color = c; }
     void setFillColor   (const QColor&  c) { m_fill  = c; }
@@ -43,12 +51,18 @@ public:
     void zoomReset() { resetTransform(); }
 
 protected:
+    void resizeEvent(QResizeEvent* e) override;
+
     void mousePressEvent  (QMouseEvent* e) override;
     void mouseMoveEvent   (QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent       (QWheelEvent* e) override;
     void drawBackground   (QPainter* painter, const QRectF& rect) override;
     void keyPressEvent    (QKeyEvent* e) override;                // NEW
+
+signals:
+    // NEW: rulers listen to these to repaint
+    void viewChanged(); 
 
 private:
     // drawing helpers
@@ -68,6 +82,7 @@ private:
         enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT } type;
         QGraphicsRectItem* item { nullptr };
     };
+    void applyLayerState(int layer); // NEW
     void createHandlesForSelected();   // NEW
     void clearHandles();               // NEW
     void layoutHandles();              // NEW
@@ -75,6 +90,8 @@ private:
     bool handleMouseMove (const QPointF& scenePos);                         // NEW
     bool handleMouseRelease(const QPointF& scenePos);                       // NEW
 
+    QHash<int,bool> m_layerVisible;  // default true
+    QHash<int,bool> m_layerLocked;
     QVector<QPointF> collectSnapPoints(QGraphicsItem* it) const;           // NEW
     void updateSnapIndicator(const QPointF& p) const;                       // NEW
 

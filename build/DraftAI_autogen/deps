@@ -735,6 +735,9 @@ DraftAI_autogen/timestamp: \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/main.cpp \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/MainWindow.cpp \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/MainWindow.h \
+	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/RulerWidget.cpp \
+	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/RulerWidget.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonDocument \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
@@ -896,6 +899,7 @@ DraftAI_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QColor \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QMouseEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPolygonF \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QResizeEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QTransform \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QUndoStack \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QWheelEvent \
@@ -942,6 +946,7 @@ DraftAI_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QGraphicsScene \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QGraphicsView \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QMainWindow \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qabstractscrollarea.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qframe.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qgraphicsscene.h \

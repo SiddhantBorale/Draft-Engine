@@ -8,6 +8,7 @@
 #include <QGraphicsScene>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScrollBar>
 #include <QApplication>               // keyboardModifiers
 
 #include <QJsonArray>
@@ -36,11 +37,13 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
     setRenderHint(QPainter::Antialiasing);
     setDragMode(QGraphicsView::RubberBandDrag);
 
-    // Rebuild resize/rotate handles on selection change  // NEW
-    connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]{
-        clearHandles();
-        createHandlesForSelected();
-    });
+    // sensible defaults
+    m_layerVisible.clear(); // all visible by default via value()
+    m_layerLocked .clear(); // all unlocked by default via value()
+
+    // rulers: notify when scrolled
+    connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
+    connect(verticalScrollBar(),   &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
 }
 
 // ─── Grid + object Snap helper (Shift enables object snap) ───
@@ -98,29 +101,22 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 // ─── Mouse overrides ─────────────────────────────────────────
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
-    const QPointF sceneP = mapToScene(e->pos());
-
-    // Try handle drag first (resize/rotate) // NEW
-    if (handleMousePress(sceneP, e->button())) {
-        return;
-    }
-
     if (m_tool == Tool::Select) {
-        // Track move start for undo // NEW
-        auto sel = m_scene->selectedItems();
-        if (sel.size() == 1) {
-            m_moveTarget  = sel.first();
-            m_moveStartPos = m_moveTarget->pos();
-        } else {
-            m_moveTarget = nullptr;
-        }
         setDragMode(QGraphicsView::RubberBandDrag);
         QGraphicsView::mousePressEvent(e);
         return;
     }
+
+    // block drawing on locked layer
+    if (isLayerLocked(m_layer)) {
+        QGraphicsView::mousePressEvent(e);
+        return;
+    }
+
     setDragMode(QGraphicsView::NoDrag);
 
-    const QPointF pos = snap(sceneP);
+    const QPointF sceneP = mapToScene(e->pos());
+    const QPointF pos    = snap(sceneP);
 
     switch (m_tool) {
     case Tool::Line: {
@@ -148,11 +144,9 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
     case Tool::Polygon: {
-        // Left click = add point, Right click = finish
         if (e->button() == Qt::RightButton) {
             if (m_polyActive && m_poly.size() > 2) {
-                // finalize polygon → push Add undo
-                if (m_tempItem && m_undo) pushAddCmd(m_tempItem, "Add Polygon");
+                // finalize polygon
             }
             m_polyActive = false;
             m_poly.clear();
@@ -170,7 +164,6 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
             item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
             m_tempItem = item;
         } else {
-            // add a vertex
             m_poly << p;
             if (auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem))
                 polyItem->setPolygon(m_poly);
@@ -181,6 +174,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         QGraphicsView::mousePressEvent(e);
     }
 }
+
 
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
@@ -292,8 +286,8 @@ void DrawingCanvas::wheelEvent(QWheelEvent* e)
 {
     const double  factor = e->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
     scale(factor, factor);
+    emit viewChanged();
 }
-
 // ─── SVG export ──────────────────────────────────────────────
 bool DrawingCanvas::exportSvg(const QString& filePath)
 {
@@ -534,6 +528,10 @@ void DrawingCanvas::updateSnapIndicator(const QPointF& p) const
 }
 
 /* =================== Resize/Rotate handles =================== */ // NEW
+void DrawingCanvas::resizeEvent(QResizeEvent* e) {
+    QGraphicsView::resizeEvent(e);
+    emit viewChanged();
+}
 void DrawingCanvas::clearHandles()
 {
     for (auto& h : m_handles) {
@@ -703,3 +701,31 @@ bool DrawingCanvas::handleMouseRelease(const QPointF& scenePos)
     m_activeHandle.reset();
     return true;
 }
+
+// NEW
+void DrawingCanvas::setLayerVisibility(int layer, bool on) {
+    m_layerVisible[layer] = on;
+    applyLayerState(layer);
+}
+
+void DrawingCanvas::setLayerLocked(int layer, bool on) {
+    m_layerLocked[layer] = on;
+    applyLayerState(layer);
+}
+
+void DrawingCanvas::applyLayerState(int layer) {
+    const bool vis = m_layerVisible.value(layer, true);
+    const bool lock= m_layerLocked .value(layer, false);
+
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (it->data(0).toInt() != layer) continue;
+        it->setVisible(vis);
+
+        QGraphicsItem::GraphicsItemFlags f = it->flags();
+        f.setFlag(QGraphicsItem::ItemIsSelectable, !lock);
+        f.setFlag(QGraphicsItem::ItemIsMovable,    !lock);
+        it->setFlags(f);
+    }
+    viewport()->update();
+}
+
