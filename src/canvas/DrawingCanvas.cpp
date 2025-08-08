@@ -320,14 +320,13 @@ void DrawingCanvas::loadFromJson(const QJsonDocument& doc)
         const auto type = o.value("type").toString();
 
         auto mkPen  = [&](const QJsonObject& oo){
-            QPen p(hexToColor(oo.value("color").toString("#ff000000")));
-            p.setWidthF(oo.value("width").toDouble(0));
-            return p;
+        QPen p(hexToColor(oo.value("color").toString("#ff000000")));
+        p.setWidthF(oo.value("width").toDouble(1.0));
+        return p;
         };
         auto mkBrush= [&](const QJsonObject& oo){
-            QColor fill = hexToColor(
-                oo.value("fill").toString(QColor(Qt::transparent).name(QColor::HexArgb))
-            );
+            const QString def = QColor(Qt::transparent).name(QColor::HexArgb);
+            QColor fill = hexToColor(oo.value("fill").toString(def));
             return QBrush(fill);
         };
         int layer = o.value("layer").toInt(0);

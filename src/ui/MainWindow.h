@@ -14,15 +14,23 @@ public:
 
 private slots:
     // toolbar/menu actions
+   private slots:
     void chooseColor();
+    void chooseFillColor();   // NEW
+    void changeLineWidth(double w); // NEW
     void toggleGrid();
     void newScene();
     void openJson();
     void saveJson();
-    void importSvg();   // <-- switched from DXF
+    void importSvg();
     void exportSvg();
-    void runBluePrintAI();  // POST to FastAPI stub
+    void runBluePrintAI();
 
+    // Zoom
+    void zoomIn();
+    void zoomOut();
+    void zoomReset();
+    
 private:
     // helpers that build the UI
     void setupToolPanel();
