@@ -13,18 +13,18 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 private slots:
-    /* toolbar/menu actions */
+    // toolbar/menu actions
     void chooseColor();
     void toggleGrid();
     void newScene();
     void openJson();
     void saveJson();
-    void openDxf();
+    void importSvg();   // <-- switched from DXF
     void exportSvg();
-    void runBluePrintAI();          // POST to FastAPI stub
+    void runBluePrintAI();  // POST to FastAPI stub
 
 private:
-    /* helpers that build the UI */
+    // helpers that build the UI
     void setupToolPanel();
     void setupMenus();
 

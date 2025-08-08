@@ -4,8 +4,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QColor>
-#include <QJsonDocument>      // ← for save/load JSON
-#include <memory>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 class DrawingCanvas : public QGraphicsView
 {
@@ -15,42 +15,37 @@ public:
 
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
-    /* ——— drawing / UI state ——— */
-    void setCurrentTool (Tool  t)           { m_tool  = t; }
-    void setCurrentColor(const QColor&  c)  { m_color = c; }
-    void setCurrentLayer(int layer)         { m_layer = layer; }
-    void toggleGrid()                       { m_showGrid = !m_showGrid; viewport()->update(); }
+    void setCurrentTool (Tool t)           { m_tool  = t; }
+    void setCurrentColor(const QColor&  c) { m_color = c; }
+    void setCurrentLayer(int layer)        { m_layer = layer; }
+    void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
 
-    /* ——— persistence ——— */
+    // Persistence
     QJsonDocument saveToJson() const;
     void          loadFromJson(const QJsonDocument& doc);
 
-    /* ——— file I/O ——— */
-    bool importDxf(const QString& filePath);   // convenience wrapper
+    // File I/O
+    bool importSvg(const QString& filePath);   // NEW
     bool exportSvg(const QString& filePath);
-    bool openDxf  (const QString& filePath);   // actual loader (defined in .cpp)
 
 protected:
-    /* ——— QGraphicsView overrides ——— */
-    void mousePressEvent  (QMouseEvent*  e) override;
-    void mouseMoveEvent   (QMouseEvent*  e) override;
-    void mouseReleaseEvent(QMouseEvent*  e) override;
-    void wheelEvent       (QWheelEvent*  e) override;
-    void drawBackground   (QPainter* p, const QRectF& rect) override;
+    void mousePressEvent  (QMouseEvent* e) override;
+    void mouseMoveEvent   (QMouseEvent* e) override;
+    void mouseReleaseEvent(QMouseEvent* e) override;
+    void wheelEvent       (QWheelEvent* e) override;
+    void drawBackground   (QPainter* painter, const QRectF& rect) override;
 
 private:
-    QPointF snap(const QPointF& scenePos) const;   // grid + (future) object snap
+    QPointF snap(const QPointF& scenePos) const;
 
-    /* ——— scene & drawing state ——— */
-    QGraphicsScene* m_scene        { nullptr };
-    Tool            m_tool         { Tool::Select };
-    QColor          m_color        { Qt::black };
-    int             m_layer        { 0 };
+    QGraphicsScene* m_scene { nullptr };
+    Tool            m_tool   { Tool::Select };
+    QColor          m_color  { Qt::black };
+    int             m_layer  { 0 };
 
-    QGraphicsItem*  m_tempItem     { nullptr };
+    QGraphicsItem*  m_tempItem { nullptr };
     QPointF         m_startPos;
 
-    /* ——— grid settings ——— */
-    bool    m_showGrid   { true };
-    double  m_gridSize   { 25.0 };   // pixels
+    bool    m_showGrid { true };
+    double  m_gridSize { 25.0 };
 };
