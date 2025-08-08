@@ -1,4 +1,5 @@
 #pragma once
+#include <QPolygonF>
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QMouseEvent>
@@ -37,6 +38,8 @@ protected:
 
 private:
     QPointF snap(const QPointF& scenePos) const;
+    QPen    currentPen() const { QPen p(m_color); p.setWidthF(1.0); return p; }
+    QBrush  currentBrush() const { return Qt::NoBrush; }
 
     QGraphicsScene* m_scene { nullptr };
     Tool            m_tool   { Tool::Select };
@@ -48,4 +51,7 @@ private:
 
     bool    m_showGrid { true };
     double  m_gridSize { 25.0 };
+
+    bool      m_polyActive { false };
+    QPolygonF m_poly;
 };

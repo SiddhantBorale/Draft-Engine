@@ -76,14 +76,14 @@ void MainWindow::setupToolPanel()
 void MainWindow::setupMenus()
 {
     auto* file = menuBar()->addMenu("&File");
-    file->addAction("New",         this, &MainWindow::newScene,  QKeySequence::New);
-    file->addAction("Open JSON…",  this, &MainWindow::openJson,  QKeySequence::Open);
-    file->addAction("Save JSON…",  this, &MainWindow::saveJson,  QKeySequence::Save);
+    file->addAction("New",        QKeySequence::New,  this, &MainWindow::newScene);
+    file->addAction("Open JSON…", QKeySequence::Open, this, &MainWindow::openJson);
+    file->addAction("Save JSON…", QKeySequence::Save, this, &MainWindow::saveJson);
     file->addSeparator();
-    file->addAction("Import SVG…", this, &MainWindow::importSvg, QKeySequence("Ctrl+I")); // changed
-    file->addAction("Export SVG…", this, &MainWindow::exportSvg, QKeySequence("Ctrl+E"));
+    file->addAction("Import SVG…", QKeySequence("Ctrl+I"), this, &MainWindow::importSvg);
+    file->addAction("Export SVG…", QKeySequence("Ctrl+E"), this, &MainWindow::exportSvg);
     file->addSeparator();
-    file->addAction("E&xit", qApp, &QCoreApplication::quit, QKeySequence::Quit);
+    file->addAction("E&xit", QKeySequence::Quit, qApp, &QCoreApplication::quit);
 
     auto* ai = menuBar()->addMenu("&AI");
     ai->addAction("Blueprint → Vectorise…",

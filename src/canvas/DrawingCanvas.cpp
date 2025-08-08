@@ -71,28 +71,135 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
     if (m_tool == Tool::Select) {
+        setDragMode(QGraphicsView::RubberBandDrag);
         QGraphicsView::mousePressEvent(e);
         return;
     }
-    m_startPos = snap(mapToScene(e->pos()));
-    // TODO: create preview item (m_tempItem) based on current tool
+    setDragMode(QGraphicsView::NoDrag);
+
+    const QPointF pos = snap(mapToScene(e->pos()));
+
+    switch (m_tool) {
+    case Tool::Line: {
+        m_startPos = pos;
+        auto* item = m_scene->addLine(QLineF(pos, pos), currentPen());
+        item->setData(0, m_layer);
+        item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_tempItem = item;
+        break;
+    }
+    case Tool::Rect: {
+        m_startPos = pos;
+        auto* item = m_scene->addRect(QRectF(pos, pos), currentPen(), currentBrush());
+        item->setData(0, m_layer);
+        item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_tempItem = item;
+        break;
+    }
+    case Tool::Ellipse: {
+        m_startPos = pos;
+        auto* item = m_scene->addEllipse(QRectF(pos, pos), currentPen(), currentBrush());
+        item->setData(0, m_layer);
+        item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_tempItem = item;
+        break;
+    }
+    case Tool::Polygon: {
+        // Left click = add point, Right click or double-click = finish
+        if (e->button() == Qt::RightButton) {
+            if (m_polyActive && m_poly.size() > 2) {
+                // finalize: keep as-is
+            }
+            m_polyActive = false;
+            m_poly.clear();
+            m_tempItem = nullptr;
+            return;
+        }
+        const QPointF p = pos;
+        if (!m_polyActive) {
+            m_polyActive = true;
+            m_poly.clear();
+            m_poly << p;
+
+            auto* item = m_scene->addPolygon(m_poly, currentPen(), currentBrush());
+            item->setData(0, m_layer);
+            item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            m_tempItem = item;
+        } else {
+            // add a vertex
+            m_poly << p;
+            auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem);
+            if (polyItem) polyItem->setPolygon(m_poly);
+        }
+        break;
+    }
+    default:
+        QGraphicsView::mousePressEvent(e);
+    }
 }
 
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
-    if (!m_tempItem || m_tool == Tool::Polygon) {
+    if (m_tool == Tool::Select) {
         QGraphicsView::mouseMoveEvent(e);
         return;
     }
-    const QPointF current = snap(mapToScene(e->pos()));
-    // TODO: update m_tempItem geometry based on tool & m_startPos → current
+
+    const QPointF cur = snap(mapToScene(e->pos()));
+
+    switch (m_tool) {
+    case Tool::Line: {
+        if (auto* it = qgraphicsitem_cast<QGraphicsLineItem*>(m_tempItem)) {
+            it->setLine(QLineF(m_startPos, cur));
+        }
+        break;
+    }
+    case Tool::Rect: {
+        if (auto* it = qgraphicsitem_cast<QGraphicsRectItem*>(m_tempItem)) {
+            it->setRect(QRectF(m_startPos, cur).normalized());
+        }
+        break;
+    }
+    case Tool::Ellipse: {
+        if (auto* it = qgraphicsitem_cast<QGraphicsEllipseItem*>(m_tempItem)) {
+            it->setRect(QRectF(m_startPos, cur).normalized());
+        }
+        break;
+    }
+    case Tool::Polygon: {
+        if (m_polyActive) {
+            // live preview: last point follows cursor
+            QPolygonF preview = m_poly;
+            if (!preview.isEmpty()) {
+                if (preview.size() == 1) preview << cur;
+                else preview[preview.size()-1] = cur;
+            }
+            if (auto* it = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem)) {
+                it->setPolygon(preview);
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
 }
+
 
 void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 {
-    QGraphicsView::mouseReleaseEvent(e);
-    // TODO: commit m_tempItem to a permanent scene item
-    m_tempItem = nullptr;          // stop rubber-band preview
+    if (m_tool == Tool::Select) {
+        QGraphicsView::mouseReleaseEvent(e);
+        return;
+    }
+
+    if (m_tool == Tool::Polygon) {
+        // polygon is committed per-click; nothing on release
+        return;
+    }
+
+    // finalize preview for single-shot tools
+    m_tempItem = nullptr;
 }
 
 /* ─── wheel zoom ─────────────────────────────────────────── */
