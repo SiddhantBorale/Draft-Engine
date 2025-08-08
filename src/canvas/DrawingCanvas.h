@@ -14,6 +14,7 @@
 #include <QHash>   
 #include <QResizeEvent>
 
+class QUndoStack;
 
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
@@ -52,7 +53,6 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
-
     void mousePressEvent  (QMouseEvent* e) override;
     void mouseMoveEvent   (QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
@@ -123,6 +123,10 @@ private:
     mutable QGraphicsItemGroup* m_snapIndicator { nullptr };
 
     // --- Handles state --- NEW
+    QVector<QGraphicsItem*> m_moveItems;
+    QVector<QPointF>        m_moveOldPos;
+    QVector<QPointF>        m_moveNewPos;
+
     QVector<Handle> m_handles;
     QGraphicsEllipseItem* m_rotDot { nullptr };
     std::optional<Handle::Type> m_activeHandle;

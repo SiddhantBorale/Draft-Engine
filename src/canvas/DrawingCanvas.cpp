@@ -1,4 +1,10 @@
 #include "DrawingCanvas.h"
+#include "DrawingCanvas.h"
+#include "undo/Commands.h"
+
+#include <QScrollBar>
+#include <QUndoStack>
+#include <QKeyEvent>
 
 #include <QGraphicsLineItem>
 #include <QGraphicsRectItem>
@@ -102,44 +108,50 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
     if (m_tool == Tool::Select) {
-        setDragMode(QGraphicsView::RubberBandDrag);
-        QGraphicsView::mousePressEvent(e);
-        return;
-    }
-
-    // block drawing on locked layer
-    if (isLayerLocked(m_layer)) {
+        // prepare move tracking: capture current selection positions
+        m_moveItems.clear();
+        m_moveOldPos.clear();
+        for (auto* it : m_scene->selectedItems()) {
+            m_moveItems.push_back(it);
+            m_moveOldPos.push_back(it->pos());
+        }
         QGraphicsView::mousePressEvent(e);
         return;
     }
 
     setDragMode(QGraphicsView::NoDrag);
-
-    const QPointF sceneP = mapToScene(e->pos());
-    const QPointF pos    = snap(sceneP);
+    const QPointF pos = snap(mapToScene(e->pos()));
 
     switch (m_tool) {
     case Tool::Line: {
         m_startPos = pos;
-        auto* item = m_scene->addLine(QLineF(pos, pos), currentPen());
+        auto* item = new QGraphicsLineItem(QLineF(pos, pos));
+        item->setPen(currentPen());
         item->setData(0, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_scene->addItem(item);
         m_tempItem = item;
         break;
     }
     case Tool::Rect: {
         m_startPos = pos;
-        auto* item = m_scene->addRect(QRectF(pos, pos), currentPen(), currentBrush());
+        auto* item = new QGraphicsRectItem(QRectF(pos, pos));
+        item->setPen(currentPen());
+        item->setBrush(currentBrush());
         item->setData(0, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_scene->addItem(item);
         m_tempItem = item;
         break;
     }
     case Tool::Ellipse: {
         m_startPos = pos;
-        auto* item = m_scene->addEllipse(QRectF(pos, pos), currentPen(), currentBrush());
+        auto* item = new QGraphicsEllipseItem(QRectF(pos, pos));
+        item->setPen(currentPen());
+        item->setBrush(currentBrush());
         item->setData(0, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_scene->addItem(item);
         m_tempItem = item;
         break;
     }
@@ -147,21 +159,29 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         if (e->button() == Qt::RightButton) {
             if (m_polyActive && m_poly.size() > 2) {
                 // finalize polygon
+                if (auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem)) {
+                    polyItem->setPolygon(m_poly);
+                    if (m_undo) m_undo->push(new AddItemCommand(m_scene, polyItem));
+                }
             }
             m_polyActive = false;
             m_poly.clear();
             m_tempItem = nullptr;
             return;
         }
+
         const QPointF p = pos;
         if (!m_polyActive) {
             m_polyActive = true;
             m_poly.clear();
             m_poly << p;
 
-            auto* item = m_scene->addPolygon(m_poly, currentPen(), currentBrush());
+            auto* item = new QGraphicsPolygonItem(m_poly);
+            item->setPen(currentPen());
+            item->setBrush(currentBrush());
             item->setData(0, m_layer);
             item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            m_scene->addItem(item);
             m_tempItem = item;
         } else {
             m_poly << p;
@@ -174,7 +194,6 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         QGraphicsView::mousePressEvent(e);
     }
 }
-
 
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
@@ -233,37 +252,38 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 
 void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 {
-    const QPointF sceneP = mapToScene(e->pos());
-
-    // Handle drag (resize/rotate) // NEW
-    if (handleMouseRelease(sceneP)) {
-        // TODO: push a transform undo here (can add later as TransformItemCmd)
-        return;
-    }
-
     if (m_tool == Tool::Select) {
         QGraphicsView::mouseReleaseEvent(e);
-        // Select → if moved, push undo
-        if (m_moveTarget && m_undo) {
-            QPointF endPos = m_moveTarget->pos();
-            if ((endPos - m_moveStartPos).manhattanLength() > 0.5)
-                pushMoveCmd(m_moveTarget, m_moveStartPos, endPos, "Move");
+
+        // After a drag, check if positions changed; if yes push move command
+        if (!m_moveItems.isEmpty()) {
+            m_moveNewPos.clear();
+            m_moveNewPos.reserve(m_moveItems.size());
+            bool changed = false;
+            for (int i = 0; i < m_moveItems.size(); ++i) {
+                const QPointF np = m_moveItems[i]->pos();
+                m_moveNewPos.push_back(np);
+                if (!qFuzzyCompare(np.x(), m_moveOldPos[i].x()) ||
+                    !qFuzzyCompare(np.y(), m_moveOldPos[i].y())) {
+                    changed = true;
+                }
+            }
+            if (changed && m_undo) {
+                m_undo->push(new MoveItemsCommand(m_moveItems, m_moveOldPos, m_moveNewPos));
+            }
+            m_moveItems.clear(); m_moveOldPos.clear(); m_moveNewPos.clear();
         }
-        m_moveTarget = nullptr;
         return;
     }
 
     if (m_tool == Tool::Polygon) {
-        // polygon is committed per-click; nothing on release
+        // committed per click; we already push on right-click finalize
         return;
     }
 
-    // finalize preview for single-shot tools → push Add cmd // NEW
+    // For single-shot tools, finish geometry and push Add command
     if (m_tempItem && m_undo) {
-        QString what = (m_tool==Tool::Line) ? "Add Line" :
-                       (m_tool==Tool::Rect) ? "Add Rect" :
-                       (m_tool==Tool::Ellipse) ? "Add Ellipse" : "Add";
-        pushAddCmd(m_tempItem, what);
+        m_undo->push(new AddItemCommand(m_scene, m_tempItem));
     }
     m_tempItem = nullptr;
 }
@@ -271,11 +291,14 @@ void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 /* ─── Delete key → Delete with undo ───────────────────────── */ // NEW
 void DrawingCanvas::keyPressEvent(QKeyEvent* e)
 {
-    if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
-        auto items = m_scene->selectedItems();
-        if (!items.isEmpty() && m_undo)
-            pushDeleteCmd(items, "Delete");
-        e->accept();
+    if (e->key() == Qt::Key_Delete) {
+        const auto items = m_scene->selectedItems();
+        if (!items.isEmpty() && m_undo) {
+            QVector<QGraphicsItem*> vec;
+            vec.reserve(items.size());
+            for (auto* it : items) vec.push_back(it);
+            m_undo->push(new DeleteItemsCommand(m_scene, vec)); // redo removes immediately
+        }
         return;
     }
     QGraphicsView::keyPressEvent(e);

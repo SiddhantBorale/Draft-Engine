@@ -737,6 +737,8 @@ DraftAI_autogen/timestamp: \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/MainWindow.h \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/RulerWidget.cpp \
 	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/ui/RulerWidget.h \
+	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/undo/Commands.cpp \
+	/Users/siddhantborale/Stony\ Brook\ University/DraftAI/src/undo/Commands.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonDocument \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
