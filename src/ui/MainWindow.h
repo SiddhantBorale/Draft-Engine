@@ -66,4 +66,3 @@ private:
     QTreeWidget*            m_layerTree { nullptr };
     int                     m_nextLayerId { 1 }; // 0 already exists
 };
-
