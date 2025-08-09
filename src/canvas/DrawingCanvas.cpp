@@ -6,6 +6,11 @@
 #include <QUndoStack>
 #include <QKeyEvent>
 
+#include <QtCore/QPair>
+#include <QtCore/QHash>
+#include <cmath>
+
+
 #include <QGraphicsLineItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsEllipseItem>
@@ -51,6 +56,156 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
     connect(verticalScrollBar(),   &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
 }
+
+bool DrawingCanvas::almostEqual(const QPointF& a, const QPointF& b, double tol) {
+    return QLineF(a, b).length() <= tol;
+}
+QPointF DrawingCanvas::snapTol(const QPointF& p, double tol) {
+    // quantize to a tolerance-sized grid to make hashing/lookup stable
+    auto q = [&](double v){ return std::round(v / tol) * tol; };
+    return QPointF(q(p.x()), q(p.y()));
+}
+
+void DrawingCanvas::applyFillToSelection()
+{
+    const QBrush br = currentBrush();       // uses m_fill + m_brushStyle
+    for (QGraphicsItem* it : m_scene->selectedItems()) {
+        // Only items that have a brush
+        if (auto* s = qgraphicsitem_cast<QAbstractGraphicsShapeItem*>(it)) {
+            s->setBrush(br);
+        }
+    }
+}
+
+bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
+{
+    if (tol <= 0) tol = 1e-3;
+
+    // 1) Collect selected non-zero lines
+    QList<QGraphicsLineItem*> lines;
+    for (QGraphicsItem* it : m_scene->selectedItems()) {
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+            if (QLineF(ln->line().p1(), ln->line().p2()).length() > 1e-9)
+                lines << ln;
+        }
+    }
+    if (lines.size() < 3) return false;
+
+    struct Seg { QPointF a; QPointF b; QGraphicsLineItem* item; };
+    QVector<Seg> segs; segs.reserve(lines.size());
+    for (auto* ln : lines) segs.push_back({ ln->line().p1(), ln->line().p2(), ln });
+
+    // ---- quantized key so we can use QHash
+    using Key = QPair<qint64, qint64>;
+    auto keyOf = [&](const QPointF& p)->Key {
+        return Key{ llround(p.x() / tol), llround(p.y() / tol) };
+    };
+
+    // adjacency + representative coordinate for each key
+    QHash<Key, QVector<int>> adj;
+    QHash<Key, QPointF>      repr;
+
+    for (int i = 0; i < segs.size(); ++i) {
+        const Key ka = keyOf(segs[i].a);
+        const Key kb = keyOf(segs[i].b);
+        adj[ka].push_back(i);
+        adj[kb].push_back(i);
+        if (!repr.contains(ka)) repr.insert(ka, segs[i].a);
+        if (!repr.contains(kb)) repr.insert(kb, segs[i].b);
+    }
+
+    // pick start: prefer an endpoint of degree 1; else arbitrary (closed loop)
+    auto pickStart = [&]() -> Key {
+        for (auto it = adj.constBegin(); it != adj.constEnd(); ++it)
+            if (it.value().size() == 1) return it.key();
+        return adj.constBegin().key();
+    };
+
+    if (adj.isEmpty()) return false;
+    Key startKey = pickStart();
+    Key curKey   = startKey;
+
+    // 3) Walk the chain greedily
+    QPolygonF ordered;
+    ordered << repr.value(curKey, QPointF());
+
+    QHash<int, bool> usedSeg;
+
+    auto keysEqual = [&](const Key& k1, const Key& k2) { return k1 == k2; };
+    auto closeEnough = [&](const QPointF& a, const QPointF& b) {
+        return QLineF(a, b).length() <= tol;
+    };
+
+    for (;;) {
+        const auto options = adj.value(curKey);
+        int nextIdx = -1;
+        Key nextKey;
+
+        for (int si : options) {
+            if (usedSeg.value(si)) continue;
+            const auto& s  = segs[si];
+            const Key ka   = keyOf(s.a);
+            const Key kb   = keyOf(s.b);
+            if (keysEqual(ka, curKey)) { nextIdx = si; nextKey = kb; break; }
+            if (keysEqual(kb, curKey)) { nextIdx = si; nextKey = ka; break; }
+        }
+
+        if (nextIdx < 0) break; // no continuation
+
+        usedSeg[nextIdx] = true;
+        const QPointF nextPt = repr.value(nextKey, QPointF());
+
+        if (ordered.isEmpty() || !closeEnough(ordered.back(), nextPt))
+            ordered << nextPt;
+
+        curKey = nextKey;
+
+        // closed?
+        if (ordered.size() >= 4 && keysEqual(curKey, startKey))
+            break;
+    }
+
+    // 4) Validate polygon (closed & enough vertices)
+    if (ordered.size() < 4) return false;
+    if (!closeEnough(ordered.front(), ordered.back())) {
+        // ensure exact closure if very close
+        if (QLineF(ordered.front(), ordered.back()).length() <= tol)
+            ordered.back() = ordered.front();
+        else
+            return false;
+    }
+
+    // 5) Create polygon with first line's pen and current brush (fill/hatch)
+    QPen   pen = lines.front()->pen();
+    QBrush br  = currentBrush();
+
+    auto* polyItem = m_scene->addPolygon(ordered, pen, br);
+    polyItem->setData(0, lines.front()->data(0));
+    polyItem->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+
+    // 6) Remove original lines
+    for (auto* ln : lines) {
+        m_scene->removeItem(ln);
+        delete ln;
+    }
+
+    polyItem->setSelected(true);
+    return true;
+}
+
+void DrawingCanvas::setCurrentTool(Tool t)
+{
+    // If we leave Polygon mid‑draw, cancel its temp state
+    if (m_polyActive && t != Tool::Polygon) {
+        m_polyActive = false;
+        m_poly.clear();
+        m_tempItem = nullptr;
+    }
+    m_tool = t;
+    setDragMode(t == Tool::Select ? QGraphicsView::RubberBandDrag
+                                  : QGraphicsView::NoDrag);
+}
+
 
 // ─── Grid + object Snap helper (Shift enables object snap) ───
 QPointF DrawingCanvas::snap(const QPointF& scenePos) const
@@ -291,6 +446,18 @@ void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 /* ─── Delete key → Delete with undo ───────────────────────── */ // NEW
 void DrawingCanvas::keyPressEvent(QKeyEvent* e)
 {
+    if (e->key() == Qt::Key_Escape) {
+        if (m_polyActive) {
+            m_polyActive = false;
+            m_poly.clear();
+            m_tempItem = nullptr;
+        }
+        setCurrentTool(Tool::Select);
+        e->accept();
+        return;
+    }
+    QGraphicsView::keyPressEvent(e);
+    
     if (e->key() == Qt::Key_Delete) {
         const auto items = m_scene->selectedItems();
         if (!items.isEmpty() && m_undo) {

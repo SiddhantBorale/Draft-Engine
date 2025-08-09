@@ -29,8 +29,12 @@ public:
     void setLayerLocked(int layer, bool on);
     bool isLayerVisible(int layer) const { return m_layerVisible.value(layer, true); }
     bool isLayerLocked (int layer) const { return m_layerLocked .value(layer, false); }
+    bool joinSelectedLinesToPolygon(double tolerance = 1.5);
 
-    void setCurrentTool (Tool t)           { m_tool  = t; }
+    void applyFillToSelection();
+    // was: void setCurrentTool (Tool t) { m_tool = t; }
+    void setCurrentTool(Tool t);
+    Tool currentTool() const { return m_tool; }
     void setCurrentColor(const QColor&  c) { m_color = c; }
     void setFillColor   (const QColor&  c) { m_fill  = c; }
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
@@ -86,6 +90,8 @@ private:
         enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT } type;
         QGraphicsRectItem* item { nullptr };
     };
+    static bool almostEqual(const QPointF& a, const QPointF& b, double tol);
+    static QPointF snapTol(const QPointF& p, double tol);
     void applyLayerState(int layer); // NEW
     void createHandlesForSelected();   // NEW
     void clearHandles();               // NEW

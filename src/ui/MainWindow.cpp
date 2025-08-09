@@ -148,6 +148,18 @@ void MainWindow::setupToolPanel()
 
     v->addStretch();
 
+    auto* joinBtn = new QPushButton("Join Lines → Shape", toolWidget);
+    connect(joinBtn, &QPushButton::clicked, this, [this]{
+        if (!m_canvas->joinSelectedLinesToPolygon(2.0)) {
+            QMessageBox::information(this, "Join Lines", "Select 3+ connected lines that form a closed loop.");
+        }
+    });
+    v->addWidget(joinBtn);
+
+    auto* applyFillBtn = new QPushButton("Apply Fill to Selection", toolWidget);
+    connect(applyFillBtn, &QPushButton::clicked, this, [this]{ m_canvas->applyFillToSelection(); });
+    v->addWidget(applyFillBtn);
+
     auto* dock = new QDockWidget("Tools", this);
     dock->setWidget(toolWidget);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
@@ -250,6 +262,13 @@ void MainWindow::setupMenus()
     auto* edit = menuBar()->addMenu("&Edit");
     edit->addAction("Undo", QKeySequence::Undo, m_undo, &QUndoStack::undo);
     edit->addAction("Redo", QKeySequence::Redo, m_undo, &QUndoStack::redo);
+    edit->addSeparator();
+    edit->addAction("Join Lines → Shape", this, [this]{ 
+        if (!m_canvas->joinSelectedLinesToPolygon(2.0)) {
+            QMessageBox::information(this, "Join Lines", "Select 3+ connected lines that form a closed loop.");
+        }
+    });
+    edit->addAction("Apply Fill to Selection", this, [this]{ m_canvas->applyFillToSelection(); });
 
     // View (Zoom)
     auto* view = menuBar()->addMenu("&View");
