@@ -13,6 +13,8 @@
 #include <QVector>
 #include <QHash>   
 #include <QResizeEvent>
+#include <Qt>
+#include <QBrush>   
 
 class QUndoStack;
 
@@ -34,6 +36,7 @@ public:
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
     void setCurrentLayer(int layer)        { m_layer = layer; }
     void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
+    void setFillPattern(Qt::BrushStyle s)  { m_brushStyle = s; } 
 
     // Undo stack injection (from MainWindow)
     void setUndoStack(QUndoStack* s) { m_undo = s; }  // NEW
@@ -68,7 +71,8 @@ private:
     // drawing helpers
     QPointF snap(const QPointF& scenePos) const;
     QPen   currentPen()   const { QPen p(m_color); p.setWidthF(m_lineWidth); return p; }
-    QBrush currentBrush() const { return QBrush(m_fill); }
+    QBrush currentBrush() const { QBrush b(m_fill); b.setStyle(m_brushStyle); return b; } // <-- CHANGE
+
 
     // --- Undo commands helpers (implemented in .cpp) --- NEW
     void pushAddCmd(QGraphicsItem* item, const QString& text = "Add");    // NEW
@@ -102,6 +106,8 @@ private:
     QColor m_fill      { Qt::transparent };  // fill
     double m_lineWidth { 1.0 };
     int    m_layer     { 0 };
+
+    Qt::BrushStyle m_brushStyle { Qt::NoBrush }; 
 
     QGraphicsItem* m_tempItem { nullptr };
     QPointF        m_startPos;

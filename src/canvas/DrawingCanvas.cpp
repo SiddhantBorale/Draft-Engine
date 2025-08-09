@@ -374,6 +374,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
                 {"color", colorToHex(rc->pen().color())},
                 {"width", rc->pen().widthF()},
                 {"fill", colorToHex(rc->brush().color())},
+                {"fillStyle", int(rc->brush().style())},
                 {"layer", it->data(0).toInt()}
             };
             arr.append(o);
@@ -386,6 +387,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
                 {"color", colorToHex(el->pen().color())},
                 {"width", el->pen().widthF()},
                 {"fill", colorToHex(el->brush().color())},
+                {"fillStyle", int(rc->brush().style())},
                 {"layer", it->data(0).toInt()}
             };
             arr.append(o);
@@ -399,6 +401,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
                 {"color", colorToHex(pg->pen().color())},
                 {"width", pg->pen().widthF()},
                 {"fill", colorToHex(pg->brush().color())},
+                {"fillStyle", int(rc->brush().style())},
                 {"layer", it->data(0).toInt()}
             };
             arr.append(o);
@@ -424,10 +427,12 @@ void DrawingCanvas::loadFromJson(const QJsonDocument& doc)
             p.setWidthF(oo.value("width").toDouble(1.0));
             return p;
         };
-        auto mkBrush= [&](const QJsonObject& oo){
-            const QString def = QColor(Qt::transparent).name(QColor::HexArgb);
-            QColor fill = hexToColor(oo.value("fill").toString(def));
-            return QBrush(fill);
+        auto mkBrush = [&](const QJsonObject& oo){
+        const QString def = QColor(Qt::transparent).name(QColor::HexArgb);
+        QColor fill = hexToColor(oo.value("fill").toString(def));
+        QBrush br(fill);
+        br.setStyle(static_cast<Qt::BrushStyle>(oo.value("fillStyle").toInt(int(Qt::NoBrush)))); // NEW
+        return br;
         };
         int layer = o.value("layer").toInt(0);
 

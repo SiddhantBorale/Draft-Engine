@@ -19,6 +19,7 @@ protected:
 
 private slots:
     // toolbar/menu actions
+    void changeFillPattern(int idx); 
     void chooseColor();
     void chooseFillColor();
     void changeLineWidth(double w);

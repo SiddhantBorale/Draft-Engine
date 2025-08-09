@@ -39,8 +39,10 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
     namespace QMC = QtMocConstants;
     QtMocHelpers::StringRefStorage qt_stringData {
         "MainWindow",
-        "chooseColor",
+        "changeFillPattern",
         "",
+        "idx",
+        "chooseColor",
         "chooseFillColor",
         "changeLineWidth",
         "w",
@@ -63,46 +65,50 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
     };
 
     QtMocHelpers::UintData qt_methods {
+        // Slot 'changeFillPattern'
+        QtMocHelpers::SlotData<void(int)>(1, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 3 },
+        }}),
         // Slot 'chooseColor'
-        QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(4, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'chooseFillColor'
-        QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'changeLineWidth'
-        QtMocHelpers::SlotData<void(double)>(4, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Double, 5 },
+        QtMocHelpers::SlotData<void(double)>(6, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Double, 7 },
         }}),
         // Slot 'toggleGrid'
-        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'newScene'
-        QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'openJson'
         QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'saveJson'
+        // Slot 'newScene'
         QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'importSvg'
+        // Slot 'openJson'
         QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'exportSvg'
+        // Slot 'saveJson'
         QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'runBluePrintAI'
+        // Slot 'importSvg'
         QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomIn'
+        // Slot 'exportSvg'
         QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomOut'
+        // Slot 'runBluePrintAI'
         QtMocHelpers::SlotData<void()>(14, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomReset'
+        // Slot 'zoomIn'
         QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomToFit'
+        // Slot 'zoomOut'
         QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'undo'
+        // Slot 'zoomReset'
         QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'redo'
+        // Slot 'zoomToFit'
         QtMocHelpers::SlotData<void()>(18, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'addLayer'
+        // Slot 'undo'
         QtMocHelpers::SlotData<void()>(19, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'removeSelectedLayer'
+        // Slot 'redo'
         QtMocHelpers::SlotData<void()>(20, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'setCurrentLayerFromList'
+        // Slot 'addLayer'
         QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'removeSelectedLayer'
+        QtMocHelpers::SlotData<void()>(22, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'setCurrentLayerFromList'
+        QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -126,25 +132,26 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
     auto *_t = static_cast<MainWindow *>(_o);
     if (_c == QMetaObject::InvokeMetaMethod) {
         switch (_id) {
-        case 0: _t->chooseColor(); break;
-        case 1: _t->chooseFillColor(); break;
-        case 2: _t->changeLineWidth((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
-        case 3: _t->toggleGrid(); break;
-        case 4: _t->newScene(); break;
-        case 5: _t->openJson(); break;
-        case 6: _t->saveJson(); break;
-        case 7: _t->importSvg(); break;
-        case 8: _t->exportSvg(); break;
-        case 9: _t->runBluePrintAI(); break;
-        case 10: _t->zoomIn(); break;
-        case 11: _t->zoomOut(); break;
-        case 12: _t->zoomReset(); break;
-        case 13: _t->zoomToFit(); break;
-        case 14: _t->undo(); break;
-        case 15: _t->redo(); break;
-        case 16: _t->addLayer(); break;
-        case 17: _t->removeSelectedLayer(); break;
-        case 18: _t->setCurrentLayerFromList(); break;
+        case 0: _t->changeFillPattern((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
+        case 1: _t->chooseColor(); break;
+        case 2: _t->chooseFillColor(); break;
+        case 3: _t->changeLineWidth((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
+        case 4: _t->toggleGrid(); break;
+        case 5: _t->newScene(); break;
+        case 6: _t->openJson(); break;
+        case 7: _t->saveJson(); break;
+        case 8: _t->importSvg(); break;
+        case 9: _t->exportSvg(); break;
+        case 10: _t->runBluePrintAI(); break;
+        case 11: _t->zoomIn(); break;
+        case 12: _t->zoomOut(); break;
+        case 13: _t->zoomReset(); break;
+        case 14: _t->zoomToFit(); break;
+        case 15: _t->undo(); break;
+        case 16: _t->redo(); break;
+        case 17: _t->addLayer(); break;
+        case 18: _t->removeSelectedLayer(); break;
+        case 19: _t->setCurrentLayerFromList(); break;
         default: ;
         }
     }
@@ -169,14 +176,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 19)
+        if (_id < 20)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 19;
+        _id -= 20;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 19)
+        if (_id < 20)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 19;
+        _id -= 20;
     }
     return _id;
 }

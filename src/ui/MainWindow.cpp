@@ -90,6 +90,24 @@ void MainWindow::setupToolPanel()
     connect(fillBtn, &QPushButton::clicked, this, &MainWindow::chooseFillColor);
     v->addWidget(fillBtn);
 
+    // Hatch / line shading
+    auto* hatchRow = new QWidget(toolWidget);
+    auto* hatchLay = new QHBoxLayout(hatchRow);
+    hatchLay->setContentsMargins(0,0,0,0);
+    hatchLay->addWidget(new QLabel("Hatch:", hatchRow));
+
+    auto* hatchBox = new QComboBox(hatchRow);
+    hatchBox->addItem("None");          // 0
+    hatchBox->addItem("Horizontal");    // 1
+    hatchBox->addItem("Vertical");      // 2
+    hatchBox->addItem("Diag \\ (Left)");// 3  (Qt::BDiagPattern)
+    hatchBox->addItem("Diag / (Right)");// 4  (Qt::FDiagPattern)
+    hatchBox->addItem("Cross");         // 5  (optional bonus)
+    connect(hatchBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::changeFillPattern);
+    hatchLay->addWidget(hatchBox);
+    v->addWidget(hatchRow);
+
     // Line width
     auto* lwRow = new QWidget(toolWidget);
     auto* lwLay = new QHBoxLayout(lwRow);
@@ -159,6 +177,22 @@ void MainWindow::setupToolPanel()
     makeSC(QKeySequence('F'),      [this]{ zoomToFit(); });
 #endif
 }
+
+void MainWindow::changeFillPattern(int idx)
+{
+    // Map combo index → Qt brush style
+    Qt::BrushStyle s = Qt::NoBrush;
+    switch (idx) {
+        case 1: s = Qt::HorPattern;   break; // horizontal
+        case 2: s = Qt::VerPattern;   break; // vertical ("straight")
+        case 3: s = Qt::BDiagPattern; break; // "\" (left diagonal)
+        case 4: s = Qt::FDiagPattern; break; // "/" (right diagonal)
+        case 5: s = Qt::CrossPattern; break; // optional cross
+        default: s = Qt::NoBrush;     break;
+    }
+    m_canvas->setFillPattern(s);
+}
+
 
 /* ───────────────────────────  Layers dock  ───────────────────────── */
 void MainWindow::setupLayersDock()
