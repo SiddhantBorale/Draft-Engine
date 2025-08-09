@@ -16,6 +16,7 @@
 #include <Qt>
 #include <QBrush>   
 
+
 class QUndoStack;
 
 class DrawingCanvas : public QGraphicsView {
@@ -65,7 +66,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent       (QWheelEvent* e) override;
     void drawBackground   (QPainter* painter, const QRectF& rect) override;
-    void keyPressEvent    (QKeyEvent* e) override;                // NEW
+    void keyPressEvent(QKeyEvent* e) override;
+    void keyReleaseEvent(QKeyEvent* e) override;
 
 signals:
     // NEW: rulers listen to these to repaint
@@ -99,7 +101,8 @@ private:
     bool handleMousePress(const QPointF& scenePos, Qt::MouseButton btn);   // NEW
     bool handleMouseMove (const QPointF& scenePos);                         // NEW
     bool handleMouseRelease(const QPointF& scenePos);                       // NEW
-
+    bool m_spacePanning { false }; 
+    
     QHash<int,bool> m_layerVisible;  // default true
     QHash<int,bool> m_layerLocked;
     QVector<QPointF> collectSnapPoints(QGraphicsItem* it) const;           // NEW

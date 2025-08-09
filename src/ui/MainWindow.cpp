@@ -22,11 +22,13 @@ MainWindow::MainWindow(QWidget* parent)
       m_net(new QNetworkAccessManager(this)),
       m_undo(new QUndoStack(this))
 {
-    setCentralWidget(nullptr);
+    setCentralWidget(m_canvas);
     setupCentralWithRulers(); 
     setupToolPanel();
     setupMenus();
     setupLayersDock();
+
+    m_canvas->setFocus();
 
     // 🔗 give the canvas the undo stack so it can push commands
     m_canvas->setUndoStack(m_undo);

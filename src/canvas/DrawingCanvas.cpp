@@ -55,6 +55,12 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
     // rulers: notify when scrolled
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
     connect(verticalScrollBar(),   &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
+
+    setFocusPolicy(Qt::StrongFocus); 
+    viewport()->setFocusPolicy(Qt::StrongFocus);                   // <— important
+    setMouseTracking(true);
+    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+
 }
 
 bool DrawingCanvas::almostEqual(const QPointF& a, const QPointF& b, double tol) {
@@ -195,8 +201,7 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
 
 void DrawingCanvas::setCurrentTool(Tool t)
 {
-    // If we leave Polygon mid‑draw, cancel its temp state
-    if (m_polyActive && t != Tool::Polygon) {
+   if (m_polyActive && t != Tool::Polygon) {
         m_polyActive = false;
         m_poly.clear();
         m_tempItem = nullptr;
@@ -262,6 +267,20 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 // ─── Mouse overrides ─────────────────────────────────────────
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
+
+    if (m_spacePanning) {
+        QGraphicsView::mousePressEvent(e);
+        return;
+    }
+
+    // ... your existing logic (select vs draw tools) ...
+    if (m_tool == Tool::Select) {
+        setDragMode(QGraphicsView::RubberBandDrag);
+        QGraphicsView::mousePressEvent(e);
+        return;
+    }
+    setDragMode(QGraphicsView::NoDrag);
+
     if (m_tool == Tool::Select) {
         // prepare move tracking: capture current selection positions
         m_moveItems.clear();
@@ -354,6 +373,8 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
     const QPointF sceneP = mapToScene(e->pos());
 
+    if (m_spacePanning) { QGraphicsView::mouseMoveEvent(e); return; }
+
     // Handle drag (resize/rotate) // NEW
     if (handleMouseMove(sceneP)) {
         layoutHandles();
@@ -407,6 +428,8 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 
 void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 {
+    if (m_spacePanning) { QGraphicsView::mouseReleaseEvent(e); return; }
+
     if (m_tool == Tool::Select) {
         QGraphicsView::mouseReleaseEvent(e);
 
@@ -446,6 +469,14 @@ void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
 /* ─── Delete key → Delete with undo ───────────────────────── */ // NEW
 void DrawingCanvas::keyPressEvent(QKeyEvent* e)
 {
+    if (e->key() == Qt::Key_Space && !e->isAutoRepeat()) {
+        m_spacePanning = true;
+        setDragMode(QGraphicsView::ScrollHandDrag);
+        viewport()->setCursor(Qt::ClosedHandCursor);
+        e->accept();
+        return;
+    }
+
     if (e->key() == Qt::Key_Escape) {
         if (m_polyActive) {
             m_polyActive = false;
@@ -456,20 +487,34 @@ void DrawingCanvas::keyPressEvent(QKeyEvent* e)
         e->accept();
         return;
     }
-    QGraphicsView::keyPressEvent(e);
-    
-    if (e->key() == Qt::Key_Delete) {
-        const auto items = m_scene->selectedItems();
-        if (!items.isEmpty() && m_undo) {
-            QVector<QGraphicsItem*> vec;
-            vec.reserve(items.size());
-            for (auto* it : items) vec.push_back(it);
-            m_undo->push(new DeleteItemsCommand(m_scene, vec)); // redo removes immediately
+
+    if ((e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) && !e->isAutoRepeat()) {
+        const auto sel = m_scene->selectedItems();
+        for (QGraphicsItem* it : sel) {
+            m_scene->removeItem(it);
+            delete it;
         }
+        e->accept();
         return;
     }
     QGraphicsView::keyPressEvent(e);
 }
+
+void DrawingCanvas::keyReleaseEvent(QKeyEvent* e)
+{
+    if (e->key() == Qt::Key_Space && m_spacePanning && !e->isAutoRepeat()) {
+        m_spacePanning = false;
+        // restore drag mode according to current tool
+        setDragMode(m_tool == Tool::Select ? QGraphicsView::RubberBandDrag
+                                           : QGraphicsView::NoDrag);
+        viewport()->unsetCursor();
+        e->accept();
+        return;
+    }
+
+    QGraphicsView::keyReleaseEvent(e);
+}
+
 
 /* ─── wheel zoom ─────────────────────────────────────────── */
 void DrawingCanvas::wheelEvent(QWheelEvent* e)
