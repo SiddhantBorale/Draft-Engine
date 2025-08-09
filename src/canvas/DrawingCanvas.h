@@ -7,15 +7,12 @@
 #include <QColor>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QUndoStack>              
-#include <optional>                
-#include <QPointer>                
-#include <QVector>
-#include <QHash>   
+#include <QBrush>
 #include <QResizeEvent>
-#include <Qt>
-#include <QBrush>   
-
+#include <QHash>
+#include <QPointer>
+#include <QVector>
+#include <optional>
 
 class QUndoStack;
 
@@ -25,26 +22,35 @@ public:
     enum class Tool { Select, Line, Rect, Ellipse, Polygon };
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
-    // Settings
-    void setLayerVisibility(int layer, bool on);
-    void setLayerLocked(int layer, bool on);
-    bool isLayerVisible(int layer) const { return m_layerVisible.value(layer, true); }
-    bool isLayerLocked (int layer) const { return m_layerLocked .value(layer, false); }
-    bool joinSelectedLinesToPolygon(double tolerance = 1.5);
+    // Layer controls
+    void setLayerVisibility(int layerId, bool visible);
+    void setLayerLocked(int layerId, bool locked);
+    bool isLayerVisible(int layerId) const {
+        auto st = m_layers.value(layerId, LayerState{true,false});
+        return st.visible;
+    }
+    bool isLayerLocked(int layerId) const {
+        auto st = m_layers.value(layerId, LayerState{true,false});
+        return st.locked;
+    }
+    void moveItemsToLayer(int fromLayer, int toLayer);
 
+    // Editing helpers
+    bool joinSelectedLinesToPolygon(double tolerance = 1.5);
     void applyFillToSelection();
-    // was: void setCurrentTool (Tool t) { m_tool = t; }
+
+    // Settings / tools
     void setCurrentTool(Tool t);
     Tool currentTool() const { return m_tool; }
     void setCurrentColor(const QColor&  c) { m_color = c; }
     void setFillColor   (const QColor&  c) { m_fill  = c; }
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
-    void setCurrentLayer(int layer)        { m_layer = layer; }
+    void setCurrentLayer(int layer); // declaration only (defined in .cpp)
     void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
-    void setFillPattern(Qt::BrushStyle s)  { m_brushStyle = s; } 
+    void setFillPattern(Qt::BrushStyle s)  { m_brushStyle = s; }
 
     // Undo stack injection (from MainWindow)
-    void setUndoStack(QUndoStack* s) { m_undo = s; }  // NEW
+    void setUndoStack(QUndoStack* s) { m_undo = s; }
 
     // Persistence
     QJsonDocument saveToJson() const;
@@ -55,9 +61,13 @@ public:
     bool exportSvg(const QString& filePath);
 
     // Zoom helpers
-    void zoomIn()    { scale(1.15, 1.15); }
-    void zoomOut()   { scale(1.0/1.15, 1.0/1.15); }
-    void zoomReset() { resetTransform(); }
+    void zoomIn()    { scale(1.15, 1.15); emit viewChanged(); }
+    void zoomOut()   { scale(1.0/1.15, 1.0/1.15); emit viewChanged(); }
+    void zoomReset() { resetTransform(); emit viewChanged(); }
+
+signals:
+    // rulers listen to this
+    void viewChanged();
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
@@ -66,47 +76,44 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent       (QWheelEvent* e) override;
     void drawBackground   (QPainter* painter, const QRectF& rect) override;
-    void keyPressEvent(QKeyEvent* e) override;
-    void keyReleaseEvent(QKeyEvent* e) override;
-
-signals:
-    // NEW: rulers listen to these to repaint
-    void viewChanged(); 
+    void keyPressEvent    (QKeyEvent* e) override;
+    void keyReleaseEvent  (QKeyEvent* e) override;
 
 private:
     // drawing helpers
     QPointF snap(const QPointF& scenePos) const;
     QPen   currentPen()   const { QPen p(m_color); p.setWidthF(m_lineWidth); return p; }
-    QBrush currentBrush() const { QBrush b(m_fill); b.setStyle(m_brushStyle); return b; } // <-- CHANGE
+    QBrush currentBrush() const { QBrush b(m_fill); b.setStyle(m_brushStyle); return b; }
 
-
-    // --- Undo commands helpers (implemented in .cpp) --- NEW
-    void pushAddCmd(QGraphicsItem* item, const QString& text = "Add");    // NEW
+    // Undo helpers (push commands)
+    void pushAddCmd(QGraphicsItem* item, const QString& text = "Add");
     void pushMoveCmd(QGraphicsItem* item, const QPointF& from, const QPointF& to,
-                     const QString& text = "Move");                        // NEW
+                     const QString& text = "Move");
     void pushDeleteCmd(const QList<QGraphicsItem*>& items,
-                       const QString& text = "Delete");                    // NEW
+                       const QString& text = "Delete");
 
-    // --- Handles (resize/rotate) --- NEW
+    // Handles (resize/rotate)
     struct Handle {
         enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT } type;
         QGraphicsRectItem* item { nullptr };
     };
+    void createHandlesForSelected();
+    void clearHandles();
+    void layoutHandles();
+    bool handleMousePress  (const QPointF& scenePos, Qt::MouseButton btn);
+    bool handleMouseMove   (const QPointF& scenePos);
+    bool handleMouseRelease(const QPointF& scenePos);
+
+    // Snap helpers
     static bool almostEqual(const QPointF& a, const QPointF& b, double tol);
     static QPointF snapTol(const QPointF& p, double tol);
-    void applyLayerState(int layer); // NEW
-    void createHandlesForSelected();   // NEW
-    void clearHandles();               // NEW
-    void layoutHandles();              // NEW
-    bool handleMousePress(const QPointF& scenePos, Qt::MouseButton btn);   // NEW
-    bool handleMouseMove (const QPointF& scenePos);                         // NEW
-    bool handleMouseRelease(const QPointF& scenePos);                       // NEW
-    bool m_spacePanning { false }; 
-    
-    QHash<int,bool> m_layerVisible;  // default true
-    QHash<int,bool> m_layerLocked;
-    QVector<QPointF> collectSnapPoints(QGraphicsItem* it) const;           // NEW
-    void updateSnapIndicator(const QPointF& p) const;                       // NEW
+    QVector<QPointF> collectSnapPoints(QGraphicsItem* it) const;
+    void updateSnapIndicator(const QPointF& p) const;
+
+    // Layers
+    struct LayerState { bool visible = true; bool locked = false; };
+    void ensureLayer(int id);
+    void applyLayerStateToItem(QGraphicsItem* it, int id);
 
 private:
     QGraphicsScene* m_scene { nullptr };
@@ -115,8 +122,10 @@ private:
     QColor m_fill      { Qt::transparent };  // fill
     double m_lineWidth { 1.0 };
     int    m_layer     { 0 };
+    Qt::BrushStyle m_brushStyle { Qt::NoBrush };
 
-    Qt::BrushStyle m_brushStyle { Qt::NoBrush }; 
+    // layer map
+    QHash<int, LayerState> m_layers;
 
     QGraphicsItem* m_tempItem { nullptr };
     QPointF        m_startPos;
@@ -129,19 +138,16 @@ private:
     bool   m_showGrid { true };
     double m_gridSize { 25.0 };
 
-    // --- Undo --- NEW
+    // Undo
     QUndoStack* m_undo { nullptr };
-    QGraphicsItem* m_moveTarget { nullptr };     // for select-move tracking
-    QPointF        m_moveStartPos;               // start pos for move
-
-    // --- Snapping indicator --- NEW
-    mutable QGraphicsItemGroup* m_snapIndicator { nullptr };
-
-    // --- Handles state --- NEW
     QVector<QGraphicsItem*> m_moveItems;
     QVector<QPointF>        m_moveOldPos;
     QVector<QPointF>        m_moveNewPos;
 
+    // snap indicator
+    mutable QGraphicsItemGroup* m_snapIndicator { nullptr };
+
+    // handles state
     QVector<Handle> m_handles;
     QGraphicsEllipseItem* m_rotDot { nullptr };
     std::optional<Handle::Type> m_activeHandle;
@@ -151,4 +157,7 @@ private:
     QLineF   m_targetStartLine;
     qreal    m_targetStartRotation {0};
     QPointF  m_targetCenter;
+
+    // panning state
+    bool m_spacePanning { false };
 };

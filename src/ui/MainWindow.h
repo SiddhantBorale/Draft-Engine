@@ -7,6 +7,8 @@ class DrawingCanvas;
 class QNetworkAccessManager;
 class QUndoStack;
 class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 class MainWindow : public QMainWindow
 {
@@ -44,7 +46,8 @@ private slots:
     // Layers (list-based)
     void addLayer();
     void removeSelectedLayer();
-    void setCurrentLayerFromList();
+    void setCurrentLayerFromTree(QTreeWidgetItem* it, QTreeWidgetItem* prev);
+    void layerItemChanged(QTreeWidgetItem* it, int column);
 
 private:
     // UI builders
@@ -57,7 +60,10 @@ private:
     QNetworkAccessManager*  m_net    { nullptr };
     QUndoStack*             m_undo   { nullptr };
 
-    QListWidget*            m_layerList { nullptr };
-    int                     m_nextLayerId { 1 };
+    // QListWidget*            m_layerList { nullptr };
+    // int                     m_nextLayerId { 1 };
+
+    QTreeWidget*            m_layerTree { nullptr };
+    int                     m_nextLayerId { 1 }; // 0 already exists
 };
 

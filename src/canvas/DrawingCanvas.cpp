@@ -1,26 +1,17 @@
 #include "DrawingCanvas.h"
-#include "DrawingCanvas.h"
-#include "undo/Commands.h"
 
 #include <QScrollBar>
-#include <QUndoStack>
 #include <QKeyEvent>
+#include <QApplication>
+#include <QPainter>
 
-#include <QtCore/QPair>
-#include <QtCore/QHash>
-#include <cmath>
-
-
+#include <QAbstractGraphicsShapeItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPolygonItem>
 #include <QGraphicsItemGroup>
 #include <QGraphicsScene>
-#include <QMouseEvent>
-#include <QPainter>
-#include <QScrollBar>
-#include <QApplication>               // keyboardModifiers
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -30,64 +21,86 @@
 #include <QtSvg/QSvgRenderer>
 #include <QtSvg/QSvgGenerator>
 #include <QtSvgWidgets/QGraphicsSvgItem>
-#include <QUndoCommand>               // NEW
 
-#include <cmath>  // std::round
+#include <QUndoStack>
+#include <QUndoCommand>
+
+#include <cmath>
 #include <limits>
 
-// ─── helpers for color serialization ─────────────────────────
+// color serialize helpers
 static QString colorToHex(const QColor& c) { return c.name(QColor::HexArgb); }
 static QColor  hexToColor(const QString& s){ QColor c(s); return c.isValid()? c : QColor(Qt::black); }
 
-// ─── ctor ────────────────────────────────────────────────────
+//--------------------------------------------------------------
+// ctor
+//--------------------------------------------------------------
 DrawingCanvas::DrawingCanvas(QWidget* parent)
     : QGraphicsView(parent),
       m_scene(new QGraphicsScene(this))
 {
     setScene(m_scene);
-    setRenderHint(QPainter::Antialiasing);
+    setRenderHint(QPainter::Antialiasing, true);
+    setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setDragMode(QGraphicsView::RubberBandDrag);
-
-    // sensible defaults
-    m_layerVisible.clear(); // all visible by default via value()
-    m_layerLocked .clear(); // all unlocked by default via value()
+    setFocusPolicy(Qt::StrongFocus);
+    viewport()->setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
 
     // rulers: notify when scrolled
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
     connect(verticalScrollBar(),   &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
-
-    setFocusPolicy(Qt::StrongFocus); 
-    viewport()->setFocusPolicy(Qt::StrongFocus);                   // <— important
-    setMouseTracking(true);
-    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-
 }
 
+//--------------------------------------------------------------
+// small helpers
+//--------------------------------------------------------------
 bool DrawingCanvas::almostEqual(const QPointF& a, const QPointF& b, double tol) {
     return QLineF(a, b).length() <= tol;
 }
 QPointF DrawingCanvas::snapTol(const QPointF& p, double tol) {
-    // quantize to a tolerance-sized grid to make hashing/lookup stable
     auto q = [&](double v){ return std::round(v / tol) * tol; };
     return QPointF(q(p.x()), q(p.y()));
 }
 
+void DrawingCanvas::ensureLayer(int id) {
+    if (!m_layers.contains(id)) m_layers.insert(id, LayerState{true, false});
+}
+void DrawingCanvas::applyLayerStateToItem(QGraphicsItem* it, int id) {
+    ensureLayer(id);
+    const auto st = m_layers.value(id);
+    it->setVisible(st.visible);
+    it->setFlag(QGraphicsItem::ItemIsSelectable, !st.locked);
+    it->setFlag(QGraphicsItem::ItemIsMovable,    !st.locked);
+    it->setOpacity(st.locked ? 0.6 : 1.0);
+}
+
+void DrawingCanvas::setCurrentLayer(int layer) {
+    m_layer = layer;
+    ensureLayer(layer);
+}
+
+//--------------------------------------------------------------
+// apply fill preset to current selection
+//--------------------------------------------------------------
 void DrawingCanvas::applyFillToSelection()
 {
-    const QBrush br = currentBrush();       // uses m_fill + m_brushStyle
+    const QBrush br = currentBrush();
     for (QGraphicsItem* it : m_scene->selectedItems()) {
-        // Only items that have a brush
         if (auto* s = qgraphicsitem_cast<QAbstractGraphicsShapeItem*>(it)) {
             s->setBrush(br);
         }
     }
 }
 
+//--------------------------------------------------------------
+// join N>=3 selected lines to polygon
+//--------------------------------------------------------------
 bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
 {
     if (tol <= 0) tol = 1e-3;
 
-    // 1) Collect selected non-zero lines
     QList<QGraphicsLineItem*> lines;
     for (QGraphicsItem* it : m_scene->selectedItems()) {
         if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
@@ -101,13 +114,11 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
     QVector<Seg> segs; segs.reserve(lines.size());
     for (auto* ln : lines) segs.push_back({ ln->line().p1(), ln->line().p2(), ln });
 
-    // ---- quantized key so we can use QHash
     using Key = QPair<qint64, qint64>;
     auto keyOf = [&](const QPointF& p)->Key {
         return Key{ llround(p.x() / tol), llround(p.y() / tol) };
     };
 
-    // adjacency + representative coordinate for each key
     QHash<Key, QVector<int>> adj;
     QHash<Key, QPointF>      repr;
 
@@ -119,19 +130,17 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
         if (!repr.contains(ka)) repr.insert(ka, segs[i].a);
         if (!repr.contains(kb)) repr.insert(kb, segs[i].b);
     }
+    if (adj.isEmpty()) return false;
 
-    // pick start: prefer an endpoint of degree 1; else arbitrary (closed loop)
     auto pickStart = [&]() -> Key {
         for (auto it = adj.constBegin(); it != adj.constEnd(); ++it)
             if (it.value().size() == 1) return it.key();
         return adj.constBegin().key();
     };
 
-    if (adj.isEmpty()) return false;
     Key startKey = pickStart();
     Key curKey   = startKey;
 
-    // 3) Walk the chain greedily
     QPolygonF ordered;
     ordered << repr.value(curKey, QPointF());
 
@@ -146,7 +155,6 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
         const auto options = adj.value(curKey);
         int nextIdx = -1;
         Key nextKey;
-
         for (int si : options) {
             if (usedSeg.value(si)) continue;
             const auto& s  = segs[si];
@@ -155,33 +163,26 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
             if (keysEqual(ka, curKey)) { nextIdx = si; nextKey = kb; break; }
             if (keysEqual(kb, curKey)) { nextIdx = si; nextKey = ka; break; }
         }
-
-        if (nextIdx < 0) break; // no continuation
+        if (nextIdx < 0) break;
 
         usedSeg[nextIdx] = true;
         const QPointF nextPt = repr.value(nextKey, QPointF());
-
         if (ordered.isEmpty() || !closeEnough(ordered.back(), nextPt))
             ordered << nextPt;
 
         curKey = nextKey;
-
-        // closed?
         if (ordered.size() >= 4 && keysEqual(curKey, startKey))
             break;
     }
 
-    // 4) Validate polygon (closed & enough vertices)
     if (ordered.size() < 4) return false;
     if (!closeEnough(ordered.front(), ordered.back())) {
-        // ensure exact closure if very close
         if (QLineF(ordered.front(), ordered.back()).length() <= tol)
             ordered.back() = ordered.front();
         else
             return false;
     }
 
-    // 5) Create polygon with first line's pen and current brush (fill/hatch)
     QPen   pen = lines.front()->pen();
     QBrush br  = currentBrush();
 
@@ -189,7 +190,6 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
     polyItem->setData(0, lines.front()->data(0));
     polyItem->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
 
-    // 6) Remove original lines
     for (auto* ln : lines) {
         m_scene->removeItem(ln);
         delete ln;
@@ -199,9 +199,12 @@ bool DrawingCanvas::joinSelectedLinesToPolygon(double tol)
     return true;
 }
 
+//--------------------------------------------------------------
+// tool switching
+//--------------------------------------------------------------
 void DrawingCanvas::setCurrentTool(Tool t)
 {
-   if (m_polyActive && t != Tool::Polygon) {
+    if (m_polyActive && t != Tool::Polygon) {
         m_polyActive = false;
         m_poly.clear();
         m_tempItem = nullptr;
@@ -211,21 +214,19 @@ void DrawingCanvas::setCurrentTool(Tool t)
                                   : QGraphicsView::NoDrag);
 }
 
-
-// ─── Grid + object Snap helper (Shift enables object snap) ───
+//--------------------------------------------------------------
+// Snap (Shift enables object snaps)
+//--------------------------------------------------------------
 QPointF DrawingCanvas::snap(const QPointF& scenePos) const
 {
-    // grid
     const double gx = std::round(scenePos.x() / m_gridSize) * m_gridSize;
     const double gy = std::round(scenePos.y() / m_gridSize) * m_gridSize;
     QPointF best(gx, gy);
     double best2 = std::numeric_limits<double>::max();
 
-    // if Shift not held → grid only
     if (!(QApplication::keyboardModifiers() & Qt::ShiftModifier))
         return best;
 
-    // nearby items (scene-space bounding box query)
     const qreal px = 12.0;
     QRectF query(scenePos - QPointF(px,px), QSizeF(2*px, 2*px));
     const auto items = m_scene->items(query);
@@ -233,23 +234,22 @@ QPointF DrawingCanvas::snap(const QPointF& scenePos) const
     for (auto* it : items) {
         if (!it->isVisible()) continue;
         for (const auto& s : collectSnapPoints(it)) {
-            double d = QLineF(scenePos, s).length();
-            double d2 = d*d;
+            const double d  = QLineF(scenePos, s).length();
+            const double d2 = d * d;
             if (d2 < best2) { best2 = d2; best = s; }
         }
     }
     if (best2 < px*px) updateSnapIndicator(best);
-    else updateSnapIndicator(QPointF()); // hide
+    else updateSnapIndicator(QPointF());
     return (best2 < px*px) ? best : QPointF(gx, gy);
 }
 
-// ─── Draw background grid ────────────────────────────────────
+//--------------------------------------------------------------
+// background grid
+//--------------------------------------------------------------
 void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 {
-    if (!m_showGrid) {
-        QGraphicsView::drawBackground(p, rect);
-        return;
-    }
+    if (!m_showGrid) { QGraphicsView::drawBackground(p, rect); return; }
 
     const QPen gridPen(QColor(230, 230, 230));
     p->setPen(gridPen);
@@ -259,30 +259,24 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 
     for (double x = left; x < rect.right(); x += m_gridSize)
         p->drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()));
-
     for (double y = top; y < rect.bottom(); y += m_gridSize)
         p->drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y));
 }
 
-// ─── Mouse overrides ─────────────────────────────────────────
+//--------------------------------------------------------------
+// mouse events
+//--------------------------------------------------------------
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
+    if (m_spacePanning) { QGraphicsView::mousePressEvent(e); return; }
 
-    if (m_spacePanning) {
-        QGraphicsView::mousePressEvent(e);
-        return;
-    }
+    const QPointF pos = snap(mapToScene(e->pos()));
 
-    // ... your existing logic (select vs draw tools) ...
+    // handles first
     if (m_tool == Tool::Select) {
-        setDragMode(QGraphicsView::RubberBandDrag);
-        QGraphicsView::mousePressEvent(e);
-        return;
-    }
-    setDragMode(QGraphicsView::NoDrag);
+        if (handleMousePress(pos, e->button())) { e->accept(); return; }
 
-    if (m_tool == Tool::Select) {
-        // prepare move tracking: capture current selection positions
+        // capture current selection positions to detect move
         m_moveItems.clear();
         m_moveOldPos.clear();
         for (auto* it : m_scene->selectedItems()) {
@@ -293,8 +287,8 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         return;
     }
 
+    // drawing tools
     setDragMode(QGraphicsView::NoDrag);
-    const QPointF pos = snap(mapToScene(e->pos()));
 
     switch (m_tool) {
     case Tool::Line: {
@@ -302,6 +296,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         auto* item = new QGraphicsLineItem(QLineF(pos, pos));
         item->setPen(currentPen());
         item->setData(0, m_layer);
+        applyLayerStateToItem(item, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
         m_scene->addItem(item);
         m_tempItem = item;
@@ -313,6 +308,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         item->setPen(currentPen());
         item->setBrush(currentBrush());
         item->setData(0, m_layer);
+        applyLayerStateToItem(item, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
         m_scene->addItem(item);
         m_tempItem = item;
@@ -324,6 +320,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         item->setPen(currentPen());
         item->setBrush(currentBrush());
         item->setData(0, m_layer);
+        applyLayerStateToItem(item, m_layer);
         item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
         m_scene->addItem(item);
         m_tempItem = item;
@@ -332,10 +329,9 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
     case Tool::Polygon: {
         if (e->button() == Qt::RightButton) {
             if (m_polyActive && m_poly.size() > 2) {
-                // finalize polygon
                 if (auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem)) {
                     polyItem->setPolygon(m_poly);
-                    if (m_undo) m_undo->push(new AddItemCommand(m_scene, polyItem));
+                    pushAddCmd(polyItem, "Add Polygon");
                 }
             }
             m_polyActive = false;
@@ -343,7 +339,6 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
             m_tempItem = nullptr;
             return;
         }
-
         const QPointF p = pos;
         if (!m_polyActive) {
             m_polyActive = true;
@@ -354,6 +349,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
             item->setPen(currentPen());
             item->setBrush(currentBrush());
             item->setData(0, m_layer);
+            applyLayerStateToItem(item, m_layer);
             item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
             m_scene->addItem(item);
             m_tempItem = item;
@@ -372,14 +368,10 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
     const QPointF sceneP = mapToScene(e->pos());
-
     if (m_spacePanning) { QGraphicsView::mouseMoveEvent(e); return; }
 
-    // Handle drag (resize/rotate) // NEW
-    if (handleMouseMove(sceneP)) {
-        layoutHandles();
-        return;
-    }
+    // handles drag
+    if (handleMouseMove(sceneP)) { layoutHandles(); return; }
 
     if (m_tool == Tool::Select) {
         QGraphicsView::mouseMoveEvent(e);
@@ -409,7 +401,6 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
     }
     case Tool::Polygon: {
         if (m_polyActive) {
-            // live preview: last point follows cursor
             QPolygonF preview = m_poly;
             if (!preview.isEmpty()) {
                 if (preview.size() == 1) preview << cur;
@@ -421,8 +412,7 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
         }
         break;
     }
-    default:
-        break;
+    default: break;
     }
 }
 
@@ -431,9 +421,10 @@ void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
     if (m_spacePanning) { QGraphicsView::mouseReleaseEvent(e); return; }
 
     if (m_tool == Tool::Select) {
+        if (handleMouseRelease(mapToScene(e->pos()))) { layoutHandles(); return; }
+
         QGraphicsView::mouseReleaseEvent(e);
 
-        // After a drag, check if positions changed; if yes push move command
         if (!m_moveItems.isEmpty()) {
             m_moveNewPos.clear();
             m_moveNewPos.reserve(m_moveItems.size());
@@ -447,26 +438,31 @@ void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
                 }
             }
             if (changed && m_undo) {
-                m_undo->push(new MoveItemsCommand(m_moveItems, m_moveOldPos, m_moveNewPos));
+                // push one command per item for now
+                for (int i = 0; i < m_moveItems.size(); ++i)
+                    pushMoveCmd(m_moveItems[i], m_moveOldPos[i], m_moveNewPos[i], "Move");
             }
             m_moveItems.clear(); m_moveOldPos.clear(); m_moveNewPos.clear();
+
+            // refresh handles for new selection (if single)
+            clearHandles();
+            createHandlesForSelected();
+            layoutHandles();
         }
         return;
     }
 
-    if (m_tool == Tool::Polygon) {
-        // committed per click; we already push on right-click finalize
-        return;
-    }
+    if (m_tool == Tool::Polygon) return;
 
-    // For single-shot tools, finish geometry and push Add command
-    if (m_tempItem && m_undo) {
-        m_undo->push(new AddItemCommand(m_scene, m_tempItem));
+    if (m_tempItem) {
+        pushAddCmd(m_tempItem, "Add");
     }
     m_tempItem = nullptr;
 }
 
-/* ─── Delete key → Delete with undo ───────────────────────── */ // NEW
+//--------------------------------------------------------------
+// keys: space pan, delete, escape
+//--------------------------------------------------------------
 void DrawingCanvas::keyPressEvent(QKeyEvent* e)
 {
     if (e->key() == Qt::Key_Space && !e->isAutoRepeat()) {
@@ -490,10 +486,7 @@ void DrawingCanvas::keyPressEvent(QKeyEvent* e)
 
     if ((e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) && !e->isAutoRepeat()) {
         const auto sel = m_scene->selectedItems();
-        for (QGraphicsItem* it : sel) {
-            m_scene->removeItem(it);
-            delete it;
-        }
+        if (!sel.isEmpty()) pushDeleteCmd(sel, "Delete");
         e->accept();
         return;
     }
@@ -504,26 +497,28 @@ void DrawingCanvas::keyReleaseEvent(QKeyEvent* e)
 {
     if (e->key() == Qt::Key_Space && m_spacePanning && !e->isAutoRepeat()) {
         m_spacePanning = false;
-        // restore drag mode according to current tool
         setDragMode(m_tool == Tool::Select ? QGraphicsView::RubberBandDrag
                                            : QGraphicsView::NoDrag);
         viewport()->unsetCursor();
         e->accept();
         return;
     }
-
     QGraphicsView::keyReleaseEvent(e);
 }
 
-
-/* ─── wheel zoom ─────────────────────────────────────────── */
+//--------------------------------------------------------------
+// wheel zoom
+//--------------------------------------------------------------
 void DrawingCanvas::wheelEvent(QWheelEvent* e)
 {
     const double  factor = e->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
     scale(factor, factor);
     emit viewChanged();
 }
-// ─── SVG export ──────────────────────────────────────────────
+
+//--------------------------------------------------------------
+// SVG export/import
+//--------------------------------------------------------------
 bool DrawingCanvas::exportSvg(const QString& filePath)
 {
     if (filePath.isEmpty()) return false;
@@ -538,21 +533,16 @@ bool DrawingCanvas::exportSvg(const QString& filePath)
     return painter.isActive();
 }
 
-// ─── SVG import (as a single QGraphicsSvgItem) ──────────────
 bool DrawingCanvas::importSvg(const QString& filePath)
 {
     if (filePath.isEmpty()) return false;
 
     auto* item = new QGraphicsSvgItem(filePath);
-    if (!item->renderer()->isValid()) {
-        delete item;
-        return false;
-    }
+    if (!item->renderer()->isValid()) { delete item; return false; }
 
     item->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
     m_scene->addItem(item);
 
-    // Fit the view around imported art
     const auto br = item->boundingRect();
     if (!br.isEmpty()) {
         m_scene->setSceneRect(br.marginsAdded(QMarginsF(50,50,50,50)));
@@ -561,7 +551,9 @@ bool DrawingCanvas::importSvg(const QString& filePath)
     return true;
 }
 
-// ─── JSON save/load (unchanged except style) ─────────────────
+//--------------------------------------------------------------
+// JSON save/load
+//--------------------------------------------------------------
 QJsonDocument DrawingCanvas::saveToJson() const
 {
     QJsonArray arr;
@@ -599,7 +591,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
                 {"color", colorToHex(el->pen().color())},
                 {"width", el->pen().widthF()},
                 {"fill", colorToHex(el->brush().color())},
-                {"fillStyle", int(rc->brush().style())},
+                {"fillStyle", int(el->brush().style())},
                 {"layer", it->data(0).toInt()}
             };
             arr.append(o);
@@ -613,7 +605,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
                 {"color", colorToHex(pg->pen().color())},
                 {"width", pg->pen().widthF()},
                 {"fill", colorToHex(pg->brush().color())},
-                {"fillStyle", int(rc->brush().style())},
+                {"fillStyle", int(pg->brush().style())},
                 {"layer", it->data(0).toInt()}
             };
             arr.append(o);
@@ -630,22 +622,22 @@ void DrawingCanvas::loadFromJson(const QJsonDocument& doc)
     const auto root = doc.object();
     const auto arr = root.value("items").toArray();
 
-    for (const auto& v : arr) {
-        const auto o = v.toObject();
-        const auto type = o.value("type").toString();
-
-        auto mkPen  = [&](const QJsonObject& oo){
-            QPen p(hexToColor(oo.value("color").toString("#ff000000")));
-            p.setWidthF(oo.value("width").toDouble(1.0));
-            return p;
-        };
-        auto mkBrush = [&](const QJsonObject& oo){
+    auto mkPen  = [&](const QJsonObject& oo){
+        QPen p(hexToColor(oo.value("color").toString("#ff000000")));
+        p.setWidthF(oo.value("width").toDouble(1.0));
+        return p;
+    };
+    auto mkBrush = [&](const QJsonObject& oo){
         const QString def = QColor(Qt::transparent).name(QColor::HexArgb);
         QColor fill = hexToColor(oo.value("fill").toString(def));
         QBrush br(fill);
-        br.setStyle(static_cast<Qt::BrushStyle>(oo.value("fillStyle").toInt(int(Qt::NoBrush)))); // NEW
+        br.setStyle(static_cast<Qt::BrushStyle>(oo.value("fillStyle").toInt(int(Qt::NoBrush))));
         return br;
-        };
+    };
+
+    for (const auto& v : arr) {
+        const auto o = v.toObject();
+        const auto type = o.value("type").toString();
         int layer = o.value("layer").toInt(0);
 
         if (type == "line") {
@@ -654,18 +646,21 @@ void DrawingCanvas::loadFromJson(const QJsonDocument& doc)
                                         mkPen(o));
             it->setData(0, layer);
             it->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            applyLayerStateToItem(it, layer);
         } else if (type == "rect") {
             QRectF r(o["x"].toDouble(), o["y"].toDouble(),
                      o["w"].toDouble(), o["h"].toDouble());
             auto* it = m_scene->addRect(r, mkPen(o), mkBrush(o));
             it->setData(0, layer);
             it->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            applyLayerStateToItem(it, layer);
         } else if (type == "ellipse") {
             QRectF r(o["x"].toDouble(), o["y"].toDouble(),
                      o["w"].toDouble(), o["h"].toDouble());
             auto* it = m_scene->addEllipse(r, mkPen(o), mkBrush(o));
             it->setData(0, layer);
             it->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            applyLayerStateToItem(it, layer);
         } else if (type == "polygon") {
             QPolygonF poly;
             for (const auto& pv : o["points"].toArray()) {
@@ -675,11 +670,14 @@ void DrawingCanvas::loadFromJson(const QJsonDocument& doc)
             auto* it = m_scene->addPolygon(poly, mkPen(o), mkBrush(o));
             it->setData(0, layer);
             it->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            applyLayerStateToItem(it, layer);
         }
     }
 }
 
-/* ======================= Undo command impls ======================= */ // NEW
+//--------------------------------------------------------------
+// Undo command impls (simple in-file commands)
+//--------------------------------------------------------------
 namespace {
     struct AddItemCmd : public QUndoCommand {
         QGraphicsScene* s; QGraphicsItem* it;
@@ -703,6 +701,7 @@ namespace {
         void redo() override { it->setPos(b); }
     };
 }
+
 void DrawingCanvas::pushAddCmd(QGraphicsItem* item, const QString& text) {
     if (m_undo) m_undo->push(new AddItemCmd(m_scene, item, text));
 }
@@ -713,7 +712,9 @@ void DrawingCanvas::pushDeleteCmd(const QList<QGraphicsItem*>& items, const QStr
     if (m_undo) m_undo->push(new DeleteItemsCmd(m_scene, items, text));
 }
 
-/* ======================= Object snap helpers ======================= */ // NEW
+//--------------------------------------------------------------
+// snap points + indicator
+//--------------------------------------------------------------
 QVector<QPointF> DrawingCanvas::collectSnapPoints(QGraphicsItem* it) const
 {
     QVector<QPointF> pts;
@@ -743,7 +744,6 @@ QVector<QPointF> DrawingCanvas::collectSnapPoints(QGraphicsItem* it) const
 
 void DrawingCanvas::updateSnapIndicator(const QPointF& p) const
 {
-    // Hide if invalid (NaN check via isNull on lines below)
     if (!m_snapIndicator && !p.isNull()) {
         auto* cross = new QGraphicsItemGroup;
         auto* h = m_scene->addLine(QLineF(p.x()-5, p.y(), p.x()+5, p.y()), QPen(Qt::red, 0));
@@ -752,7 +752,6 @@ void DrawingCanvas::updateSnapIndicator(const QPointF& p) const
         cross->setZValue(1e6);
         m_snapIndicator = cross;
     } else if (m_snapIndicator && !p.isNull()) {
-        // Move children to new p — simplest is recreate:
         auto kids = m_snapIndicator->childItems();
         for (auto* k : kids) m_scene->removeItem(k), delete k;
         auto* h = m_scene->addLine(QLineF(p.x()-5, p.y(), p.x()+5, p.y()), QPen(Qt::red, 0));
@@ -767,7 +766,9 @@ void DrawingCanvas::updateSnapIndicator(const QPointF& p) const
     }
 }
 
-/* =================== Resize/Rotate handles =================== */ // NEW
+//--------------------------------------------------------------
+// handles (resize/rotate)
+//--------------------------------------------------------------
 void DrawingCanvas::resizeEvent(QResizeEvent* e) {
     QGraphicsView::resizeEvent(e);
     emit viewChanged();
@@ -789,7 +790,6 @@ void DrawingCanvas::createHandlesForSelected()
     if (sel.size() != 1) return;
     m_target = sel.first();
 
-    // Only basic primitives (line/rect/ellipse/polygon) for now
     if (!qgraphicsitem_cast<QGraphicsLineItem*>(m_target) &&
         !qgraphicsitem_cast<QGraphicsRectItem*>(m_target) &&
         !qgraphicsitem_cast<QGraphicsEllipseItem*>(m_target) &&
@@ -806,7 +806,6 @@ void DrawingCanvas::createHandlesForSelected()
     addHandle(T::ML);               addHandle(T::MR);
     addHandle(T::BL); addHandle(T::BM); addHandle(T::BR);
 
-    // rotate dot above top
     m_rotDot = m_scene->addEllipse(QRectF(-hs/2,-hs/2,hs,hs), QPen(Qt::darkGreen,0), QBrush(Qt::green));
     m_rotDot->setZValue(1e6);
 
@@ -841,7 +840,12 @@ void DrawingCanvas::layoutHandles()
 bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton btn)
 {
     Q_UNUSED(btn);
-    if (!m_target) return false;
+    if (!m_target) {
+        clearHandles();
+        createHandlesForSelected();
+        layoutHandles();
+        return false;
+    }
 
     for (auto& h : m_handles) {
         if (h.item->sceneBoundingRect().contains(scenePos)) {
@@ -884,7 +888,6 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
         return true;
     }
 
-    // local delta in item's coordinates
     QPointF localStart = m_target->mapFromScene(m_handleStartScene);
     QPointF localNow   = m_target->mapFromScene(scenePos);
     QPointF delta      = localNow - localStart;
@@ -924,8 +927,8 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
     if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(m_target)) {
         QLineF L = m_targetStartLine;
         switch (type) {
-        case Handle::TL: L.setP1(L.p1()+delta); break; // reuse TL for P1
-        case Handle::BR: L.setP2(L.p2()+delta); break; // reuse BR for P2
+        case Handle::TL: L.setP1(L.p1()+delta); break; // reusing TL as P1
+        case Handle::BR: L.setP2(L.p2()+delta); break; // reusing BR as P2
         default: break;
         }
         ln->setLine(L);
@@ -942,30 +945,39 @@ bool DrawingCanvas::handleMouseRelease(const QPointF& scenePos)
     return true;
 }
 
-// NEW
-void DrawingCanvas::setLayerVisibility(int layer, bool on) {
-    m_layerVisible[layer] = on;
-    applyLayerState(layer);
-}
-
-void DrawingCanvas::setLayerLocked(int layer, bool on) {
-    m_layerLocked[layer] = on;
-    applyLayerState(layer);
-}
-
-void DrawingCanvas::applyLayerState(int layer) {
-    const bool vis = m_layerVisible.value(layer, true);
-    const bool lock= m_layerLocked .value(layer, false);
+//--------------------------------------------------------------
+// Layers API
+//--------------------------------------------------------------
+void DrawingCanvas::setLayerVisibility(int layerId, bool visible) {
+    ensureLayer(layerId);
+    m_layers[layerId].visible = visible;
 
     for (QGraphicsItem* it : m_scene->items()) {
-        if (it->data(0).toInt() != layer) continue;
-        it->setVisible(vis);
-
-        QGraphicsItem::GraphicsItemFlags f = it->flags();
-        f.setFlag(QGraphicsItem::ItemIsSelectable, !lock);
-        f.setFlag(QGraphicsItem::ItemIsMovable,    !lock);
-        it->setFlags(f);
+        if (it->data(0).toInt() == layerId) it->setVisible(visible);
     }
     viewport()->update();
 }
 
+void DrawingCanvas::setLayerLocked(int layerId, bool locked) {
+    ensureLayer(layerId);
+    m_layers[layerId].locked = locked;
+
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (it->data(0).toInt() == layerId) {
+            it->setFlag(QGraphicsItem::ItemIsSelectable, !locked);
+            it->setFlag(QGraphicsItem::ItemIsMovable,    !locked);
+            it->setOpacity(locked ? 0.6 : 1.0);
+        }
+    }
+    viewport()->update();
+}
+
+void DrawingCanvas::moveItemsToLayer(int fromLayer, int toLayer) {
+    ensureLayer(toLayer);
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (it->data(0).toInt() == fromLayer) {
+            it->setData(0, toLayer);
+            applyLayerStateToItem(it, toLayer);
+        }
+    }
+}

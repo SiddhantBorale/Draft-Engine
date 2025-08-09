@@ -61,7 +61,12 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         "redo",
         "addLayer",
         "removeSelectedLayer",
-        "setCurrentLayerFromList"
+        "setCurrentLayerFromTree",
+        "QTreeWidgetItem*",
+        "it",
+        "prev",
+        "layerItemChanged",
+        "column"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -107,8 +112,14 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'removeSelectedLayer'
         QtMocHelpers::SlotData<void()>(22, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'setCurrentLayerFromList'
-        QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'setCurrentLayerFromTree'
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, QTreeWidgetItem *)>(23, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 24, 25 }, { 0x80000000 | 24, 26 },
+        }}),
+        // Slot 'layerItemChanged'
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(27, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 24, 25 }, { QMetaType::Int, 28 },
+        }}),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -151,7 +162,8 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 16: _t->redo(); break;
         case 17: _t->addLayer(); break;
         case 18: _t->removeSelectedLayer(); break;
-        case 19: _t->setCurrentLayerFromList(); break;
+        case 19: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
+        case 20: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
         default: ;
         }
     }
@@ -176,14 +188,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 20)
+        if (_id < 21)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 20;
+        _id -= 21;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 20)
+        if (_id < 21)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 20;
+        _id -= 21;
     }
     return _id;
 }

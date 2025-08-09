@@ -10,6 +10,8 @@
 #include <QMenuBar>
 #include <QUndoStack>
 #include <QListWidget>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 
 // Network
 #include <QNetworkAccessManager>
@@ -213,11 +215,16 @@ void MainWindow::setupLayersDock()
 {
     auto* pane = new QWidget(this);
     auto* lay  = new QVBoxLayout(pane);
-    lay->setContentsMargins(4,4,4,4);
+    lay->setContentsMargins(6,6,6,6);
 
-    m_layerList = new QListWidget(pane);
-    m_layerList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_layerTree = new QTreeWidget(pane);
+    m_layerTree->setColumnCount(3);
+    QStringList headers{"Layer","👁","🔒"};
+    m_layerTree->setHeaderLabels(headers);
+    m_layerTree->setRootIsDecorated(false);
+    m_layerTree->setSelectionMode(QAbstractItemView::SingleSelection);
 
+    // controls row
     auto* row = new QWidget(pane);
     auto* rowLay = new QHBoxLayout(row);
     rowLay->setContentsMargins(0,0,0,0);
@@ -225,16 +232,24 @@ void MainWindow::setupLayersDock()
     auto* delBtn = new QPushButton("–", row);
     rowLay->addWidget(addBtn);
     rowLay->addWidget(delBtn);
+    rowLay->addStretch();
 
     lay->addWidget(new QLabel("Layers", pane));
-    lay->addWidget(m_layerList);
+    lay->addWidget(m_layerTree);
     lay->addWidget(row);
 
-    // seed with Layer 0
-    m_layerList->addItem("Layer 0");
-    m_layerList->setCurrentRow(0);
-    connect(m_layerList, &QListWidget::currentRowChanged,
-            this, [this](int){ setCurrentLayerFromList(); });
+    // Seed Layer 0
+    auto* it0 = new QTreeWidgetItem(m_layerTree);
+    it0->setText(0, "Layer 0");
+    it0->setData(0, Qt::UserRole, 0);
+    it0->setCheckState(1, Qt::Checked);   // visible
+    it0->setCheckState(2, Qt::Unchecked); // unlocked
+    m_layerTree->setCurrentItem(it0);
+
+    connect(m_layerTree, &QTreeWidget::currentItemChanged,
+            this, &MainWindow::setCurrentLayerFromTree);
+    connect(m_layerTree, &QTreeWidget::itemChanged,
+            this, &MainWindow::layerItemChanged);
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::addLayer);
     connect(delBtn, &QPushButton::clicked, this, &MainWindow::removeSelectedLayer);
 
@@ -245,7 +260,6 @@ void MainWindow::setupLayersDock()
     // ensure canvas starts on layer 0
     m_canvas->setCurrentLayer(0);
 }
-
 /* ───────────────────────────  Menus  ─────────────────────────── */
 void MainWindow::setupMenus()
 {
@@ -284,6 +298,20 @@ void MainWindow::setupMenus()
     ai->addAction("Blueprint → Vectorise…",
                   QKeySequence("Ctrl+Shift+V"),
                   this, &MainWindow::runBluePrintAI);
+}
+
+void MainWindow::layerItemChanged(QTreeWidgetItem* it, int column)
+{
+    if (!it) return;
+    const int id = it->data(0, Qt::UserRole).toInt();
+
+    if (column == 1) { // visibility
+        const bool vis = (it->checkState(1) == Qt::Checked);
+        m_canvas->setLayerVisibility(id, vis);
+    } else if (column == 2) { // lock
+        const bool lock = (it->checkState(2) == Qt::Checked);
+        m_canvas->setLayerLocked(id, lock);
+    }
 }
 
 /* ───────────────────────  Slots / actions  ───────────────────── */
@@ -363,24 +391,46 @@ void MainWindow::redo() { m_undo->redo(); }
 /* ───────────────────────  Layers actions  ───────────────────── */
 void MainWindow::addLayer()
 {
-    m_layerList->addItem(QString("Layer %1").arg(m_nextLayerId));
-    m_layerList->setCurrentRow(m_layerList->count() - 1);
-    ++m_nextLayerId;
+    auto* it = new QTreeWidgetItem(m_layerTree);
+    it->setText(0, QString("Layer %1").arg(m_nextLayerId));
+    it->setData(0, Qt::UserRole, m_nextLayerId);
+    it->setFlags(it->flags() | Qt::ItemIsEditable);
+    it->setCheckState(1, Qt::Checked);
+    it->setCheckState(2, Qt::Unchecked);
+    m_layerTree->setCurrentItem(it);
+    m_nextLayerId++;
 }
+
 
 void MainWindow::removeSelectedLayer()
 {
-    const int row = m_layerList->currentRow();
-    if (row <= 0) return; // keep Layer 0
-    delete m_layerList->takeItem(row);
-    m_layerList->setCurrentRow(std::max(0, row - 1));
+    auto* it = m_layerTree->currentItem();
+    if (!it) return;
+
+    const int id = it->data(0, Qt::UserRole).toInt();
+    if (id == 0) return; // keep Layer 0
+
+    // Move items from this layer to 0 (safer than delete)
+    m_canvas->moveItemsToLayer(id, 0);
+
+    delete it;
+    // select something sensible
+    if (m_layerTree->topLevelItemCount() > 0)
+        m_layerTree->setCurrentItem(m_layerTree->topLevelItem(0));
 }
 
-void MainWindow::setCurrentLayerFromList()
+// void MainWindow::setCurrentLayerFromList()
+// {
+//     int row = m_layerList->currentRow();
+//     if (row < 0) row = 0;
+//     m_canvas->setCurrentLayer(row);
+// }
+
+void MainWindow::setCurrentLayerFromTree(QTreeWidgetItem* it, QTreeWidgetItem* /*prev*/)
 {
-    int row = m_layerList->currentRow();
-    if (row < 0) row = 0;
-    m_canvas->setCurrentLayer(row);
+    if (!it) return;
+    const int id = it->data(0, Qt::UserRole).toInt();
+    m_canvas->setCurrentLayer(id);
 }
 
 /* ───────────────────────  Spacebar pan  ───────────────────── */
