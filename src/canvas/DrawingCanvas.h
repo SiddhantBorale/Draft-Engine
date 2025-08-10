@@ -13,6 +13,8 @@
 #include <QPointer>
 #include <QVector>
 #include <optional>
+#include <QGraphicsPathItem>
+#include <QPainterPath>
 
 class QUndoStack;
 
@@ -40,6 +42,8 @@ public:
     void applyFillToSelection();
 
     // Settings / tools
+    bool roundSelectedShape(double radius);   // <— smooth/rounded corners
+    bool bendSelectedLine(double sagitta);
     void setCurrentTool(Tool t);
     Tool currentTool() const { return m_tool; }
     void setCurrentColor(const QColor&  c) { m_color = c; }

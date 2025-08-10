@@ -981,3 +981,180 @@ void DrawingCanvas::moveItemsToLayer(int fromLayer, int toLayer) {
         }
     }
 }
+
+// ===================== Rounded corners / Fillet =====================
+static QPainterPath makeRoundedPolygonPath(const QPolygonF& poly, double r)
+{
+    // Clamp + trivial
+    if (poly.size() < 3 || r <= 0.0) {
+        QPainterPath p; p.addPolygon(poly); p.closeSubpath(); return p;
+    }
+
+    const bool closed = (poly.first() == poly.last());
+    // Build a working list of points (closed for math)
+    QVector<QPointF> pts = poly.toVector();
+    if (!closed) pts.push_back(poly.first()); // treat open as closed ring for turns
+
+    QPainterPath path;
+    auto N = pts.size();
+    auto prevIdx = [&](int i){ return (i-1+N) % N; };
+    auto nextIdx = [&](int i){ return (i+1) % N; };
+
+    // Start from first corner; we’ll build with lineTo + quadTo(pivot, exit)
+    // Use first corner inset as initial moveTo
+    auto cornerPoint = [&](int i){ return pts[i]; };
+
+    // Helper: inset point on edge (A->B) by distance d from corner at A
+    auto inset = [](const QPointF& A, const QPointF& B, double d)->QPointF {
+        QLineF L(A,B);
+        if (L.length() < 1e-9) return A;
+        L.setLength(d);
+        return L.p2();
+    };
+
+    // Compute per-edge inset distances so we don’t overshoot short edges
+    QVector<double> maxInset(N, r);
+    for (int i = 0; i < N; ++i) {
+        const QPointF P = pts[prevIdx(i)];
+        const QPointF C = pts[i];
+        const QPointF Nn= pts[nextIdx(i)];
+        const double a = QLineF(P, C).length();
+        const double b = QLineF(C, Nn).length();
+        const double lim = 0.5 * std::min(a, b);
+        maxInset[i] = std::min(r, lim);
+    }
+
+    // First corner moveTo:
+    {
+        const int i = 0;
+        QPointF C = cornerPoint(i);
+        QPointF P = cornerPoint(prevIdx(i));
+        QPointF enter = inset(C, P, maxInset[i]); // from C towards P
+        // start at enter point of first corner (close ring will connect)
+        path.moveTo(enter);
+    }
+
+    // For each corner, create: lineTo(enter), quadTo(corner, exit)
+    for (int i = 0; i < N; ++i) {
+        const QPointF P = cornerPoint(prevIdx(i));
+        const QPointF C = cornerPoint(i);
+        const QPointF Nn= cornerPoint(nextIdx(i));
+
+        const double d = maxInset[i];
+
+        QPointF enter = inset(C, P, d); // along CP
+        QPointF exit  = inset(C, Nn, d); // along CN
+
+        path.lineTo(enter);
+        path.quadTo(C, exit);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+bool DrawingCanvas::roundSelectedShape(double radius)
+{
+    if (radius <= 0.0) return false;
+
+    const auto sel = m_scene->selectedItems();
+    if (sel.size() != 1) return false;
+
+    QGraphicsItem* it = sel.first();
+
+    // RECT: replace with rounded rect path
+    if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(it)) {
+        const QRectF r = rc->rect();
+        QPainterPath path;
+        // clamp radius to rect size
+        const qreal rad = std::min<qreal>(radius, std::min(r.width(), r.height())/2.0);
+        path.addRoundedRect(r, rad, rad);
+
+        auto* pi = new QGraphicsPathItem(path);
+        pi->setPen(rc->pen());
+        pi->setBrush(rc->brush());
+        pi->setData(0, rc->data(0));
+        pi->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        pi->setPos(rc->pos());
+        pi->setRotation(rc->rotation());
+        pi->setTransformOriginPoint(rc->transformOriginPoint());
+
+        m_scene->addItem(pi);
+        m_scene->removeItem(rc);
+        delete rc;
+        pi->setSelected(true);
+        return true;
+    }
+
+    // POLYGON: build rounded polygon painter path
+    if (auto* pg = qgraphicsitem_cast<QGraphicsPolygonItem*>(it)) {
+        const QPolygonF poly = pg->polygon();
+        QPainterPath path = makeRoundedPolygonPath(poly, radius);
+
+        auto* pi = new QGraphicsPathItem(path);
+        pi->setPen(pg->pen());
+        pi->setBrush(pg->brush());
+        pi->setData(0, pg->data(0));
+        pi->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        pi->setPos(pg->pos());
+        pi->setRotation(pg->rotation());
+        pi->setTransformOriginPoint(pg->transformOriginPoint());
+
+        m_scene->addItem(pi);
+        m_scene->removeItem(pg);
+        delete pg;
+        pi->setSelected(true);
+        return true;
+    }
+
+    // Lines/Ellipses/Paths not handled here
+    return false;
+}
+
+// ======================= Bend line into arc =========================
+bool DrawingCanvas::bendSelectedLine(double sagitta)
+{
+    // Sagitta can be positive/negative (which side of the line to bulge)
+    const auto sel = m_scene->selectedItems();
+    if (sel.size() != 1) return false;
+
+    auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(sel.first());
+    if (!ln) return false;
+
+    const QLineF L = ln->line();
+    if (L.length() < 1e-6) return false;
+
+    const QPointF A = L.p1();
+    const QPointF B = L.p2();
+
+    // Midpoint
+    const QPointF M = (A + B) * 0.5;
+
+    // Unit normal (left-hand normal)
+    QLineF dir(A, B);
+    dir.setLength(1.0);
+    // normal = rotate dir by +90deg
+    QPointF n(-dir.dy(), dir.dx());
+
+    // Control point = midpoint offset by sagitta along normal
+    const QPointF C = M + n * sagitta;
+
+    QPainterPath path;
+    path.moveTo(A);
+    path.quadTo(C, B);
+
+    auto* pi = new QGraphicsPathItem(path);
+    pi->setPen(ln->pen());
+    pi->setBrush(Qt::NoBrush);
+    pi->setData(0, ln->data(0));
+    pi->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+    pi->setPos(ln->pos());
+    pi->setRotation(ln->rotation());
+    pi->setTransformOriginPoint(ln->transformOriginPoint());
+
+    m_scene->addItem(pi);
+    m_scene->removeItem(ln);
+    delete ln;
+
+    pi->setSelected(true);
+    return true;
+}

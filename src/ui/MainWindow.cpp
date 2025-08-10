@@ -131,6 +131,34 @@ void MainWindow::setupToolPanel()
     connect(gridBtn, &QPushButton::clicked, this, &MainWindow::toggleGrid);
     v->addWidget(gridBtn);
 
+    auto* gb = new QGroupBox("Geometry", toolWidget);
+    auto* g  = new QFormLayout(gb);
+
+    // Corner radius (for rects & polygons)
+    m_cornerSpin = new QDoubleSpinBox(gb);
+    m_cornerSpin->setRange(0.0, 1e6);
+    m_cornerSpin->setDecimals(2);
+    m_cornerSpin->setSingleStep(2.0);
+    m_cornerSpin->setValue(10.0);
+    auto* cornerBtn = new QPushButton("Apply Corner Radius", gb);
+    connect(cornerBtn, &QPushButton::clicked, this, &MainWindow::applyCornerRadius);
+
+    // Bend sagitta (for a selected line)
+    m_bendSpin = new QDoubleSpinBox(gb);
+    m_bendSpin->setRange(-1e6, 1e6);
+    m_bendSpin->setDecimals(2);
+    m_bendSpin->setSingleStep(2.0);
+    m_bendSpin->setValue(20.0);
+    auto* bendBtn = new QPushButton("Bend Line to Arc", gb);
+    connect(bendBtn, &QPushButton::clicked, this, &MainWindow::applyLineBend);
+
+    g->addRow("Corner radius:", m_cornerSpin);
+    g->addRow(cornerBtn);
+    g->addRow("Sagitta:", m_bendSpin);
+    g->addRow(bendBtn);
+
+    v->addWidget(gb);
+
     // Zoom controls
     auto* zoomRow = new QWidget(toolWidget);
     auto* zoomLay = new QHBoxLayout(zoomRow);
@@ -151,6 +179,8 @@ void MainWindow::setupToolPanel()
     v->addWidget(zoomRow);
 
     v->addStretch();
+
+    
 
     auto* joinBtn = new QPushButton("Join Lines → Shape", toolWidget);
     connect(joinBtn, &QPushButton::clicked, this, [this]{
@@ -454,4 +484,20 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
         }
     }
     return false;
+}
+
+void MainWindow::applyCornerRadius()
+{
+    if (!m_canvas) return;
+    const double r = m_cornerSpin ? m_cornerSpin->value() : 0.0;
+    if (r <= 0.0) return;
+    m_canvas->roundSelectedShape(r);
+}
+
+void MainWindow::applyLineBend()
+{
+    if (!m_canvas) return;
+    const double s = m_bendSpin ? m_bendSpin->value() : 0.0;
+    if (qFuzzyIsNull(s)) return;
+    m_canvas->bendSelectedLine(s);
 }

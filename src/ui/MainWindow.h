@@ -9,6 +9,8 @@ class QUndoStack;
 class QListWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QDoubleSpinBox;
+class QPushButton;
 
 class MainWindow : public QMainWindow
 {
@@ -20,6 +22,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private slots:
+    void applyCornerRadius();   // NEW
+    void applyLineBend();
+
     // toolbar/menu actions
     void changeFillPattern(int idx); 
     void chooseColor();
@@ -51,6 +56,9 @@ private slots:
 
 private:
     // UI builders
+    QDoubleSpinBox* m_cornerSpin { nullptr }; // NEW
+    QDoubleSpinBox* m_bendSpin   { nullptr }; // NEW
+
     void setupCentralWithRulers();
     void setupToolPanel();
     void setupMenus();
