@@ -17,6 +17,10 @@
 #include <QPainterPath>
 
 class QUndoStack;
+class QGraphicsRectItem;
+class QGraphicsEllipseItem;
+class QGraphicsItemGroup;
+class QGraphicsLineItem;
 
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
@@ -42,14 +46,14 @@ public:
     void applyFillToSelection();
 
     // Settings / tools
-    bool roundSelectedShape(double radius);   // <— smooth/rounded corners
+    bool roundSelectedShape(double radius);   // smooth/rounded corners
     bool bendSelectedLine(double sagitta);
     void setCurrentTool(Tool t);
     Tool currentTool() const { return m_tool; }
     void setCurrentColor(const QColor&  c) { m_color = c; }
     void setFillColor   (const QColor&  c) { m_fill  = c; }
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
-    void setCurrentLayer(int layer); // declaration only (defined in .cpp)
+    void setCurrentLayer(int layer); // defined in .cpp
     void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
     void setFillPattern(Qt::BrushStyle s)  { m_brushStyle = s; }
 
@@ -70,8 +74,7 @@ public:
     void zoomReset() { resetTransform(); emit viewChanged(); }
 
 signals:
-    // rulers listen to this
-    void viewChanged();
+    void viewChanged(); // rulers listen
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
@@ -96,9 +99,10 @@ private:
     void pushDeleteCmd(const QList<QGraphicsItem*>& items,
                        const QString& text = "Delete");
 
-    // Handles (resize/rotate)
+    // Handles (resize/rotate/bend)
     struct Handle {
-        enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT } type;
+        enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT, BEND };
+        Type type { TL };
         QGraphicsRectItem* item { nullptr };
     };
     void createHandlesForSelected();
@@ -164,4 +168,8 @@ private:
 
     // panning state
     bool m_spacePanning { false };
+
+    // bend preview
+    QGraphicsPathItem* m_bendPreview { nullptr };
+    QPointF  m_bendMidScene;
 };

@@ -40,6 +40,10 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
       m_scene(new QGraphicsScene(this))
 {
     setScene(m_scene);
+    connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]{
+    clearHandles();
+    createHandlesForSelected();
+    });
     setRenderHint(QPainter::Antialiasing, true);
     setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -268,32 +272,46 @@ void DrawingCanvas::drawBackground(QPainter* p, const QRectF& rect)
 //--------------------------------------------------------------
 void DrawingCanvas::mousePressEvent(QMouseEvent* e)
 {
-    if (m_spacePanning) { QGraphicsView::mousePressEvent(e); return; }
-
-    const QPointF pos = snap(mapToScene(e->pos()));
-
-    // handles first
-    if (m_tool == Tool::Select) {
-        if (handleMousePress(pos, e->button())) { e->accept(); return; }
-
-        // capture current selection positions to detect move
-        m_moveItems.clear();
-        m_moveOldPos.clear();
-        for (auto* it : m_scene->selectedItems()) {
-            m_moveItems.push_back(it);
-            m_moveOldPos.push_back(it->pos());
-        }
+    if (m_spacePanning) {
         QGraphicsView::mousePressEvent(e);
         return;
     }
 
-    // drawing tools
+    const QPointF sceneP  = mapToScene(e->pos());
+    const QPointF snapped = snap(sceneP);
+
+    // Selection mode: try handles first, then normal selection
+    if (m_tool == Tool::Select) {
+        // Try to grab a handle (resize/rotate/bend)
+        if (handleMousePress(sceneP, e->button())) {
+            e->accept();
+            return;
+        }
+
+        // Track positions for move undo
+        m_moveItems.clear();
+        m_moveOldPos.clear();
+        for (QGraphicsItem* it : m_scene->selectedItems()) {
+            m_moveItems.push_back(it);
+            m_moveOldPos.push_back(it->pos());
+        }
+
+        setDragMode(QGraphicsView::RubberBandDrag);
+        QGraphicsView::mousePressEvent(e);
+
+        // Selection may have changed → refresh handles
+        clearHandles();
+        createHandlesForSelected();
+        return;
+    }
+
+    // Drawing tools
     setDragMode(QGraphicsView::NoDrag);
 
     switch (m_tool) {
     case Tool::Line: {
-        m_startPos = pos;
-        auto* item = new QGraphicsLineItem(QLineF(pos, pos));
+        m_startPos = snapped;
+        auto* item = new QGraphicsLineItem(QLineF(snapped, snapped));
         item->setPen(currentPen());
         item->setData(0, m_layer);
         applyLayerStateToItem(item, m_layer);
@@ -303,8 +321,8 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
     case Tool::Rect: {
-        m_startPos = pos;
-        auto* item = new QGraphicsRectItem(QRectF(pos, pos));
+        m_startPos = snapped;
+        auto* item = new QGraphicsRectItem(QRectF(snapped, snapped));
         item->setPen(currentPen());
         item->setBrush(currentBrush());
         item->setData(0, m_layer);
@@ -315,8 +333,8 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
     case Tool::Ellipse: {
-        m_startPos = pos;
-        auto* item = new QGraphicsEllipseItem(QRectF(pos, pos));
+        m_startPos = snapped;
+        auto* item = new QGraphicsEllipseItem(QRectF(snapped, snapped));
         item->setPen(currentPen());
         item->setBrush(currentBrush());
         item->setData(0, m_layer);
@@ -327,6 +345,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
     case Tool::Polygon: {
+        // Right click finishes
         if (e->button() == Qt::RightButton) {
             if (m_polyActive && m_poly.size() > 2) {
                 if (auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem)) {
@@ -339,7 +358,8 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
             m_tempItem = nullptr;
             return;
         }
-        const QPointF p = pos;
+
+        const QPointF p = snapped;
         if (!m_polyActive) {
             m_polyActive = true;
             m_poly.clear();
@@ -362,8 +382,10 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
     }
     default:
         QGraphicsView::mousePressEvent(e);
+        break;
     }
 }
+
 
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
@@ -513,7 +535,9 @@ void DrawingCanvas::wheelEvent(QWheelEvent* e)
 {
     const double  factor = e->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
     scale(factor, factor);
+    layoutHandles();
     emit viewChanged();
+    layoutHandles();
 }
 
 //--------------------------------------------------------------
@@ -780,80 +804,150 @@ void DrawingCanvas::clearHandles()
     }
     m_handles.clear();
     if (m_rotDot) { m_scene->removeItem(m_rotDot); delete m_rotDot; m_rotDot = nullptr; }
+    if (m_bendPreview) { m_scene->removeItem(m_bendPreview); delete m_bendPreview; m_bendPreview = nullptr; }
     m_activeHandle.reset();
     m_target = nullptr;
 }
 
+
+
 void DrawingCanvas::createHandlesForSelected()
 {
-    auto sel = m_scene->selectedItems();
+    clearHandles();
+
+    const auto sel = m_scene->selectedItems();
     if (sel.size() != 1) return;
+
     m_target = sel.first();
 
+    // Only support basic primitives for now
     if (!qgraphicsitem_cast<QGraphicsLineItem*>(m_target) &&
         !qgraphicsitem_cast<QGraphicsRectItem*>(m_target) &&
         !qgraphicsitem_cast<QGraphicsEllipseItem*>(m_target) &&
-        !qgraphicsitem_cast<QGraphicsPolygonItem*>(m_target)) return;
+        !qgraphicsitem_cast<QGraphicsPolygonItem*>(m_target)) {
+        m_target = nullptr;
+        return;
+    }
 
     constexpr qreal hs = 8.0;
     auto addHandle = [&](Handle::Type t){
-        auto* r = m_scene->addRect(QRectF(-hs/2, -hs/2, hs, hs), QPen(Qt::blue, 0), QBrush(Qt::white));
+        auto* r = m_scene->addRect(QRectF(-hs/2, -hs/2, hs, hs),
+                                   QPen(Qt::blue, 0), QBrush(Qt::white));
         r->setZValue(1e6);
+        r->setFlag(QGraphicsItem::ItemIgnoresTransformations, true); // stays same size on screen
         m_handles.push_back(Handle{t, r});
     };
     using T = Handle::Type;
     addHandle(T::TL); addHandle(T::TM); addHandle(T::TR);
-    addHandle(T::ML);               addHandle(T::MR);
+    addHandle(T::ML);                 addHandle(T::MR);
     addHandle(T::BL); addHandle(T::BM); addHandle(T::BR);
 
-    m_rotDot = m_scene->addEllipse(QRectF(-hs/2,-hs/2,hs,hs), QPen(Qt::darkGreen,0), QBrush(Qt::green));
+    // rotate dot
+    m_rotDot = m_scene->addEllipse(QRectF(-hs/2, -hs/2, hs, hs),
+                                   QPen(Qt::darkGreen, 0), QBrush(Qt::green));
     m_rotDot->setZValue(1e6);
+    m_rotDot->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+
+    // optional bend handle (for lines)
+    if (qgraphicsitem_cast<QGraphicsLineItem*>(m_target)) {
+        auto* r = m_scene->addRect(QRectF(-hs/2, -hs/2, hs, hs),
+                                   QPen(Qt::darkMagenta, 0), QBrush(Qt::magenta));
+        r->setZValue(1e6);
+        r->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        m_handles.push_back(Handle{Handle::BEND, r});
+    }
 
     layoutHandles();
 }
+
 
 void DrawingCanvas::layoutHandles()
 {
     if (!m_target) return;
     QRectF br = m_target->sceneBoundingRect();
+    if (br.isEmpty()) return;
+
     m_targetCenter = br.center();
 
     auto posFor = [&](Handle::Type t){
-        if (t == Handle::TL) return QPointF(br.left(),  br.top());
-        if (t == Handle::TM) return QPointF(br.center().x(), br.top());
-        if (t == Handle::TR) return QPointF(br.right(), br.top());
-        if (t == Handle::ML) return QPointF(br.left(),  br.center().y());
-        if (t == Handle::MR) return QPointF(br.right(), br.center().y());
-        if (t == Handle::BL) return QPointF(br.left(),  br.bottom());
-        if (t == Handle::BM) return QPointF(br.center().x(), br.bottom());
-        if (t == Handle::BR) return QPointF(br.right(), br.bottom());
+        switch (t) {
+        case Handle::TL: return QPointF(br.left(),  br.top());
+        case Handle::TM: return QPointF(br.center().x(), br.top());
+        case Handle::TR: return QPointF(br.right(), br.top());
+        case Handle::ML: return QPointF(br.left(),  br.center().y());
+        case Handle::MR: return QPointF(br.right(), br.center().y());
+        case Handle::BL: return QPointF(br.left(),  br.bottom());
+        case Handle::BM: return QPointF(br.center().x(), br.bottom());
+        case Handle::BR: return QPointF(br.right(), br.bottom());
+        case Handle::ROT: // not used here
+        case Handle::BEND: // handled below
+            break;
+        }
         return QPointF();
     };
 
-    for (auto& h : m_handles) h.item->setPos(posFor(h.type));
+    for (auto& h : m_handles) {
+        if (h.type == Handle::BEND) continue; // set below for lines
+        if (h.type == Handle::ROT)   continue;
+        h.item->setPos(posFor(h.type));
+    }
+
     if (m_rotDot) {
-        QPointF top = QPointF(br.center().x(), br.top() - 20.0);
-        m_rotDot->setPos(top);
+        m_rotDot->setPos(QPointF(br.center().x(), br.top() - 20.0));
+    }
+
+    // bend handle for line: midpoint of the line’s scene endpoints
+    if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(m_target)) {
+        const QLineF Ls = QLineF(m_target->mapToScene(ln->line().p1()),
+                                 m_target->mapToScene(ln->line().p2()));
+        const QPointF mid = (Ls.p1() + Ls.p2()) / 2.0;
+        for (auto& h : m_handles) {
+            if (h.type == Handle::BEND) {
+                h.item->setPos(mid);
+            }
+        }
     }
 }
+
+
+static QPen previewPen(const QPen& base)
+{
+    QPen p = base;
+    p.setStyle(Qt::DashLine);
+    p.setCosmetic(true);
+    return p;
+}
+
+
 
 bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton btn)
 {
     Q_UNUSED(btn);
-    if (!m_target) {
-        clearHandles();
-        createHandlesForSelected();
-        layoutHandles();
-        return false;
-    }
+    if (!m_target) return false;
 
     for (auto& h : m_handles) {
         if (h.item->sceneBoundingRect().contains(scenePos)) {
             m_activeHandle = h.type;
             m_handleStartScene = scenePos;
-            m_targetCenter = m_target->sceneBoundingRect().center();
-            m_targetStartRotation = m_target->rotation();
 
+            if (*m_activeHandle == DrawingCanvas::Handle::ROT) {
+                m_targetCenter = m_target->sceneBoundingRect().center();
+                m_targetStartRotation = m_target->rotation();
+                return true;
+            }
+
+            if (*m_activeHandle == Handle::BEND &&
+                qgraphicsitem_cast<QGraphicsLineItem*>(m_target)) {
+                if (!m_bendPreview) {
+                    m_bendPreview = m_scene->addPath(QPainterPath(), QPen(Qt::darkYellow, 0));
+                    m_bendPreview->setZValue(1e6);
+                    m_bendPreview->setPen(previewPen(m_bendPreview->pen()));
+                }
+                return true;
+            }
+
+            // record starting geometry for resize on rect/ellipse/line P1/P2
+            m_targetCenter = m_target->sceneBoundingRect().center();
             if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(m_target)) {
                 m_targetStartRect = rc->rect();
             } else if (auto* el = qgraphicsitem_cast<QGraphicsEllipseItem*>(m_target)) {
@@ -865,7 +959,7 @@ bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton bt
         }
     }
     if (m_rotDot && m_rotDot->sceneBoundingRect().contains(scenePos)) {
-        m_activeHandle = Handle::ROT;
+        m_activeHandle = DrawingCanvas::Handle::ROT;
         m_handleStartScene = scenePos;
         m_targetCenter = m_target->sceneBoundingRect().center();
         m_targetStartRotation = m_target->rotation();
@@ -874,10 +968,43 @@ bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton bt
     return false;
 }
 
+
+
 bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
 {
     if (!m_activeHandle || !m_target) return false;
     auto type = *m_activeHandle;
+
+    // -------- BEND live preview on lines --------
+    if (type == Handle::BEND) {
+        auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(m_target);
+        if (!ln) return false;
+
+        QPointF A = m_target->mapToScene(ln->line().p1());
+        QPointF B = m_target->mapToScene(ln->line().p2());
+        if (QLineF(A,B).length() < 1e-6) return true;
+
+        QLineF dir(A, B); dir.setLength(1.0);
+        QPointF n(-dir.dy(), dir.dx());
+        QPointF M = m_bendMidScene;
+
+        QPointF d = scenePos - M;
+        double sagitta = d.x()*n.x() + d.y()*n.y();
+
+        QPainterPath path;
+        path.moveTo(A);
+        path.quadTo(M + n * sagitta, B);
+
+        if (!m_bendPreview) {
+            m_bendPreview = m_scene->addPath(path, previewPen(ln->pen()));
+            m_bendPreview->setZValue(1e6);
+        } else {
+            m_bendPreview->setPath(path);
+            QPen pen = previewPen(ln->pen());
+            m_bendPreview->setPen(pen);
+        }
+        return true;
+    }
 
     if (type == Handle::ROT) {
         QLineF a(m_targetCenter, m_handleStartScene);
@@ -941,9 +1068,43 @@ bool DrawingCanvas::handleMouseRelease(const QPointF& scenePos)
 {
     Q_UNUSED(scenePos);
     if (!m_activeHandle) return false;
+
+    if (*m_activeHandle == Handle::BEND) {
+        auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(m_target);
+        if (ln) {
+            // recompute sagitta from preview path’s control point if available
+            double sag = 0.0;
+
+            QPointF A = m_target->mapToScene(ln->line().p1());
+            QPointF B = m_target->mapToScene(ln->line().p2());
+            QLineF dir(A, B); dir.setLength(1.0);
+            QPointF n(-dir.dy(), dir.dx());
+            QPointF M = m_bendMidScene;
+
+            if (m_bendPreview && !m_bendPreview->path().isEmpty()
+                && m_bendPreview->path().elementCount() >= 3) {
+                auto e1 = m_bendPreview->path().elementAt(1); // quad control
+                QPointF C(e1.x, e1.y);
+                QPointF dm = C - M;
+                sag = dm.x()*n.x() + dm.y()*n.y();
+            }
+
+            if (m_bendPreview) { m_scene->removeItem(m_bendPreview); delete m_bendPreview; m_bendPreview = nullptr; }
+
+            // Select the line and convert using your existing API
+            m_target->setSelected(true);
+            bendSelectedLine(sag);
+        }
+        m_activeHandle.reset();
+        clearHandles();
+        createHandlesForSelected();
+        return true;
+    }
+
     m_activeHandle.reset();
     return true;
 }
+
 
 //--------------------------------------------------------------
 // Layers API
