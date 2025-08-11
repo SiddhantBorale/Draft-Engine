@@ -12,6 +12,7 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QDoubleSpinBox;
 class QPushButton;
+class QNetworkReply;
 
 class MainWindow : public QMainWindow
 {
@@ -39,6 +40,7 @@ private slots:
     void importSvg();
     void exportSvg();
     void runBluePrintAI();
+    void onVectoriseFinished(); 
     void changeCornerRadius(double r);
 
     // Zoom

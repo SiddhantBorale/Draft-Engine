@@ -12,11 +12,16 @@
 #include <QListWidget>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QMessageBox>
+#include <QJsonObject>
+#include <QJsonArray>
+
 
 // Network
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QHttpMultiPart>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -416,13 +421,131 @@ void MainWindow::exportSvg()
 }
 
 /* Blueprint-to-vector stub */
+#include "MainWindow.h"
+#include "canvas/DrawingCanvas.h"
+#include <QFileDialog>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QHttpMultiPart>
+#include <QMessageBox>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+
+// ...
+
 void MainWindow::runBluePrintAI()
 {
-    const QJsonObject payload{{"msg", "hello from CAD"}};
-    QNetworkRequest  req(QUrl("http://127.0.0.1:8000/vectorise"));
-    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    m_net->post(req, QJsonDocument(payload).toJson());
+    const QString fn = QFileDialog::getOpenFileName(
+        this, "Choose blueprint image", {},
+        "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)");
+    if (fn.isEmpty()) return;
+
+    auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+
+    // image part
+    QHttpPart imagePart;
+    imagePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                        QVariant("form-data; name=\"image\"; filename=\"" + QFileInfo(fn).fileName() + "\""));
+    const QString ext = QFileInfo(fn).suffix().toLower();
+    const QString mime = (ext == "jpg" || ext == "jpeg") ? "image/jpeg" :
+                         (ext == "png") ? "image/png" :
+                         (ext == "bmp") ? "image/bmp" : "application/octet-stream";
+    imagePart.setHeader(QNetworkRequest::ContentTypeHeader, mime);
+
+    auto* file = new QFile(fn);
+    if (!file->open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Vectorise", "Could not open file.");
+        file->deleteLater();
+        multi->deleteLater();
+        return;
+    }
+    imagePart.setBodyDevice(file);
+    file->setParent(multi);
+    multi->append(imagePart);
+
+    // optional tuning (form fields)
+    auto addField = [&](const char* name, const QByteArray& val){
+        QHttpPart p;
+        p.setHeader(QNetworkRequest::ContentDispositionHeader,
+                    QVariant(QString("form-data; name=\"%1\"").arg(name)));
+        p.setBody(val);
+        multi->append(p);
+    };
+    addField("min_line_len", QByteArray::number(40));
+    addField("canny1",       QByteArray::number(80));
+    addField("canny2",       QByteArray::number(160));
+    addField("approx_eps",   QByteArray::number(2.0));
+
+    QNetworkRequest req(QUrl("http://127.0.0.1:8000/vectorise"));
+    auto* reply = m_net->post(req, multi);
+    multi->setParent(reply);
+
+    connect(reply, &QNetworkReply::finished, this, &MainWindow::onVectoriseFinished);
 }
+
+void MainWindow::onVectoriseFinished()
+{
+    auto* reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray data = reply->readAll();
+    reply->deleteLater();
+
+    if (status < 200 || status >= 300) {
+        QMessageBox::warning(this, "Vectorise",
+                             QString("Server error (%1): %2").arg(status).arg(QString::fromUtf8(data)));
+        return;
+    }
+
+    QJsonParseError perr{};
+    QJsonDocument doc = QJsonDocument::fromJson(data, &perr);
+    if (perr.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, "Vectorise",
+                             QString("Bad JSON: %1").arg(perr.errorString()));
+        return;
+    }
+
+    // Load into canvas (replaces scene). If you prefer merging, say the word and I'll switch it.
+    m_canvas->loadFromJson(doc);
+
+    // Fit view nicely
+    m_canvas->fitInView(m_canvas->scene()->itemsBoundingRect().marginsAdded(QMarginsF(50,50,50,50)),
+                        Qt::KeepAspectRatio);
+}
+
+
+void MainWindow::onVectoriseFinished()
+{
+    auto* reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray data = reply->readAll();
+    reply->deleteLater();
+
+    if (status < 200 || status >= 300) {
+        QMessageBox::warning(this, "Vectorise",
+                             QString("Server error (%1): %2").arg(status).arg(QString::fromUtf8(data)));
+        return;
+    }
+
+    QJsonParseError perr{};
+    QJsonDocument doc = QJsonDocument::fromJson(data, &perr);
+    if (perr.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, "Vectorise",
+                             QString("Bad JSON: %1").arg(perr.errorString()));
+        return;
+    }
+
+    // Load into canvas (replaces scene). If you prefer merging, say the word and I'll switch it.
+    m_canvas->loadFromJson(doc);
+
+    // Fit view nicely
+    m_canvas->fitInView(m_canvas->scene()->itemsBoundingRect().marginsAdded(QMarginsF(50,50,50,50)),
+                        Qt::KeepAspectRatio);
+}
+
 
 /* ───────────────────────  Undo/Redo stubs  ───────────────────── */
 // These are placeholders; actual commands will be pushed from DrawingCanvas
