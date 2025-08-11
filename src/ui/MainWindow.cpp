@@ -32,10 +32,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_canvas->setFocus();
 
-    // 🔗 give the canvas the undo stack so it can push commands
     m_canvas->setUndoStack(m_undo);
 
-    // enable Spacebar pan via eventFilter
     qApp->installEventFilter(this);
 
     resize(1200, 800);
@@ -500,4 +498,15 @@ void MainWindow::applyLineBend()
     const double s = m_bendSpin ? m_bendSpin->value() : 0.0;
     if (qFuzzyIsNull(s)) return;
     m_canvas->bendSelectedLine(s);
+}
+
+void MainWindow::changeCornerRadius(double r) {
+    auto sel = m_canvas->scene()->selectedItems();
+    if (sel.size() != 1) return;
+    if (auto* rr = qgraphicsitem_cast<RoundedRectItem*>(sel.first())) {
+        rr->setRadius(r, r);
+        m_canvas->viewport()->update();
+        m_canvas->setSelectedCornerRadius(r);
+        m_canvas->refreshHandles(); // re-place radius knobs
+    }
 }

@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDoubleSpinBox>
 
 class DrawingCanvas;
 class QNetworkAccessManager;
@@ -37,6 +38,7 @@ private slots:
     void importSvg();
     void exportSvg();
     void runBluePrintAI();
+    void changeCornerRadius(double r);
 
     // Zoom
     void zoomIn();

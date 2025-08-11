@@ -17,10 +17,36 @@
 #include <QPainterPath>
 
 class QUndoStack;
-class QGraphicsRectItem;
-class QGraphicsEllipseItem;
-class QGraphicsItemGroup;
-class QGraphicsLineItem;
+
+/* Lightweight rounded-rect item we can edit later */
+class RoundedRectItem : public QGraphicsPathItem {
+public:
+    RoundedRectItem(const QRectF& r = QRectF(), qreal rx = 0, qreal ry = 0)
+        : m_rect(r), m_rx(rx), m_ry(ry) { updatePath(); }
+    void setRect(const QRectF& r) { m_rect = r; updatePath(); }
+    void setRadius(qreal rx, qreal ry) {
+        m_rx = qMax<qreal>(0, rx);
+        m_ry = qMax<qreal>(0, ry);
+        // clamp to half size
+        m_rx = qMin(m_rx, m_rect.width()  * 0.5);
+        m_ry = qMin(m_ry, m_rect.height() * 0.5);
+        updatePath();
+    }
+    QRectF rect() const { return m_rect; }
+    qreal  rx()   const { return m_rx; }
+    qreal  ry()   const { return m_ry;  }
+    
+private:
+    void updatePath() {
+        QPainterPath p;
+        p.addRoundedRect(m_rect.normalized(), m_rx, m_ry);
+        setPath(p);
+    }
+
+    QRectF m_rect;
+    qreal  m_rx {0};
+    qreal  m_ry {0};
+};
 
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
@@ -29,6 +55,8 @@ public:
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
+    void refreshHandles();                  // NEW: safe public wrapper
+    void setSelectedCornerRadius(double r);
     void setLayerVisibility(int layerId, bool visible);
     void setLayerLocked(int layerId, bool locked);
     bool isLayerVisible(int layerId) const {
@@ -46,14 +74,14 @@ public:
     void applyFillToSelection();
 
     // Settings / tools
-    bool roundSelectedShape(double radius);   // smooth/rounded corners
-    bool bendSelectedLine(double sagitta);
+    bool roundSelectedShape(double radius);   // (optional external control)
+    bool bendSelectedLine(double sagitta);    // (you already have bend support)
     void setCurrentTool(Tool t);
     Tool currentTool() const { return m_tool; }
     void setCurrentColor(const QColor&  c) { m_color = c; }
     void setFillColor   (const QColor&  c) { m_fill  = c; }
     void setLineWidth   (double w)         { m_lineWidth = std::max(0.0, w); }
-    void setCurrentLayer(int layer); // defined in .cpp
+    void setCurrentLayer(int layer);        // defined in .cpp
     void toggleGrid()                      { m_showGrid = !m_showGrid; viewport()->update(); }
     void setFillPattern(Qt::BrushStyle s)  { m_brushStyle = s; }
 
@@ -99,10 +127,14 @@ private:
     void pushDeleteCmd(const QList<QGraphicsItem*>& items,
                        const QString& text = "Delete");
 
-    // Handles (resize/rotate/bend)
+    // Handles (resize/rotate + bend + radius)
     struct Handle {
-        enum Type { TL, TM, TR, ML, MR, BL, BM, BR, ROT, BEND };
-        Type type { TL };
+        enum Type {
+            TL, TM, TR, ML, MR, BL, BM, BR, // resize
+            ROT,                            // rotate
+            BEND,                           // bend (for lines)
+            RAD_TL, RAD_TR, RAD_BR, RAD_BL  // NEW: corner-radius handles for rects
+        } type;
         QGraphicsRectItem* item { nullptr };
     };
     void createHandlesForSelected();

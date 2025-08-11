@@ -55,6 +55,8 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         "importSvg",
         "exportSvg",
         "runBluePrintAI",
+        "changeCornerRadius",
+        "r",
         "zoomIn",
         "zoomOut",
         "zoomReset",
@@ -102,29 +104,33 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'runBluePrintAI'
         QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'changeCornerRadius'
+        QtMocHelpers::SlotData<void(double)>(17, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Double, 18 },
+        }}),
         // Slot 'zoomIn'
-        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomOut'
-        QtMocHelpers::SlotData<void()>(18, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomReset'
         QtMocHelpers::SlotData<void()>(19, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomToFit'
+        // Slot 'zoomOut'
         QtMocHelpers::SlotData<void()>(20, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'undo'
+        // Slot 'zoomReset'
         QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'redo'
+        // Slot 'zoomToFit'
         QtMocHelpers::SlotData<void()>(22, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'addLayer'
+        // Slot 'undo'
         QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'removeSelectedLayer'
+        // Slot 'redo'
         QtMocHelpers::SlotData<void()>(24, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'addLayer'
+        QtMocHelpers::SlotData<void()>(25, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'removeSelectedLayer'
+        QtMocHelpers::SlotData<void()>(26, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'setCurrentLayerFromTree'
-        QtMocHelpers::SlotData<void(QTreeWidgetItem *, QTreeWidgetItem *)>(25, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 26, 27 }, { 0x80000000 | 26, 28 },
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, QTreeWidgetItem *)>(27, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 28, 29 }, { 0x80000000 | 28, 30 },
         }}),
         // Slot 'layerItemChanged'
-        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(29, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 26, 27 }, { QMetaType::Int, 30 },
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(31, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 28, 29 }, { QMetaType::Int, 32 },
         }}),
     };
     QtMocHelpers::UintData qt_properties {
@@ -162,16 +168,17 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 10: _t->importSvg(); break;
         case 11: _t->exportSvg(); break;
         case 12: _t->runBluePrintAI(); break;
-        case 13: _t->zoomIn(); break;
-        case 14: _t->zoomOut(); break;
-        case 15: _t->zoomReset(); break;
-        case 16: _t->zoomToFit(); break;
-        case 17: _t->undo(); break;
-        case 18: _t->redo(); break;
-        case 19: _t->addLayer(); break;
-        case 20: _t->removeSelectedLayer(); break;
-        case 21: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
-        case 22: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
+        case 13: _t->changeCornerRadius((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
+        case 14: _t->zoomIn(); break;
+        case 15: _t->zoomOut(); break;
+        case 16: _t->zoomReset(); break;
+        case 17: _t->zoomToFit(); break;
+        case 18: _t->undo(); break;
+        case 19: _t->redo(); break;
+        case 20: _t->addLayer(); break;
+        case 21: _t->removeSelectedLayer(); break;
+        case 22: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
+        case 23: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
         default: ;
         }
     }
@@ -196,14 +203,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 23)
+        if (_id < 24)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 23;
+        _id -= 24;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 23)
+        if (_id < 24)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 23;
+        _id -= 24;
     }
     return _id;
 }
