@@ -1,4 +1,5 @@
 #pragma once
+
 #include <QPolygonF>
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -15,8 +16,13 @@
 #include <optional>
 #include <QGraphicsPathItem>
 #include <QPainterPath>
+#include "dim/LinearDimItem.h"
+
 
 class QUndoStack;
+class AnchorPoint;
+class LinearDimItem;
+
 
 /* Lightweight rounded-rect item we can edit later */
 class RoundedRectItem : public QGraphicsPathItem {
@@ -51,10 +57,12 @@ private:
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
 public:
-    enum class Tool { Select, Line, Rect, Ellipse, Polygon };
+    enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear };
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
+    void setDimUnits(const QString& u) { m_dimStyle.unit = u; }
+    void setDimPrecision(int p) { m_dimStyle.precision = std::clamp(p,0,6); }
     void refreshHandles();                  // NEW: safe public wrapper
     void setSelectedCornerRadius(double r);
     void setLayerVisibility(int layerId, bool visible);
@@ -204,4 +212,12 @@ private:
     // bend preview
     QGraphicsPathItem* m_bendPreview { nullptr };
     QPointF  m_bendMidScene;
+
+    // --- Dimensions (simple 3-click placement: A, B, then offset) ---
+    DimStyle   m_dimStyle;           // style for dimensions
+    AnchorPoint* m_dimA { nullptr }; // first endpoint anchor (handle item, optional parent)
+    AnchorPoint* m_dimB { nullptr }; // second endpoint anchor
+    qreal        m_dimOffset { 20.0 };
+    bool         m_dimPending { false }; // if you run a multi-click flow
+
 };

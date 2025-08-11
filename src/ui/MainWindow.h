@@ -27,6 +27,7 @@ private slots:
     void applyLineBend();
 
     // toolbar/menu actions
+    void setDimPrecision(int p);
     void changeFillPattern(int idx); 
     void chooseColor();
     void chooseFillColor();

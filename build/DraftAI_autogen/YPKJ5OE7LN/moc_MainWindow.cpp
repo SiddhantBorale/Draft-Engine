@@ -42,6 +42,8 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         "applyCornerRadius",
         "",
         "applyLineBend",
+        "setDimPrecision",
+        "p",
         "changeFillPattern",
         "idx",
         "chooseColor",
@@ -78,59 +80,63 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'applyLineBend'
         QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'changeFillPattern'
+        // Slot 'setDimPrecision'
         QtMocHelpers::SlotData<void(int)>(4, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { QMetaType::Int, 5 },
         }}),
+        // Slot 'changeFillPattern'
+        QtMocHelpers::SlotData<void(int)>(6, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 7 },
+        }}),
         // Slot 'chooseColor'
-        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'chooseFillColor'
-        QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'changeLineWidth'
-        QtMocHelpers::SlotData<void(double)>(8, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Double, 9 },
+        QtMocHelpers::SlotData<void(double)>(10, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Double, 11 },
         }}),
         // Slot 'toggleGrid'
-        QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'newScene'
-        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'openJson'
         QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'saveJson'
+        // Slot 'newScene'
         QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'importSvg'
+        // Slot 'openJson'
         QtMocHelpers::SlotData<void()>(14, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'exportSvg'
+        // Slot 'saveJson'
         QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'runBluePrintAI'
+        // Slot 'importSvg'
         QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'exportSvg'
+        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'runBluePrintAI'
+        QtMocHelpers::SlotData<void()>(18, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'changeCornerRadius'
-        QtMocHelpers::SlotData<void(double)>(17, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Double, 18 },
+        QtMocHelpers::SlotData<void(double)>(19, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Double, 20 },
         }}),
         // Slot 'zoomIn'
-        QtMocHelpers::SlotData<void()>(19, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomOut'
-        QtMocHelpers::SlotData<void()>(20, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomReset'
         QtMocHelpers::SlotData<void()>(21, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'zoomToFit'
+        // Slot 'zoomOut'
         QtMocHelpers::SlotData<void()>(22, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'undo'
+        // Slot 'zoomReset'
         QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'redo'
+        // Slot 'zoomToFit'
         QtMocHelpers::SlotData<void()>(24, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'addLayer'
+        // Slot 'undo'
         QtMocHelpers::SlotData<void()>(25, 2, QMC::AccessPrivate, QMetaType::Void),
-        // Slot 'removeSelectedLayer'
+        // Slot 'redo'
         QtMocHelpers::SlotData<void()>(26, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'addLayer'
+        QtMocHelpers::SlotData<void()>(27, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'removeSelectedLayer'
+        QtMocHelpers::SlotData<void()>(28, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'setCurrentLayerFromTree'
-        QtMocHelpers::SlotData<void(QTreeWidgetItem *, QTreeWidgetItem *)>(27, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 28, 29 }, { 0x80000000 | 28, 30 },
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, QTreeWidgetItem *)>(29, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 30, 31 }, { 0x80000000 | 30, 32 },
         }}),
         // Slot 'layerItemChanged'
-        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(31, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { 0x80000000 | 28, 29 }, { QMetaType::Int, 32 },
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(33, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 30, 31 }, { QMetaType::Int, 34 },
         }}),
     };
     QtMocHelpers::UintData qt_properties {
@@ -157,28 +163,29 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         switch (_id) {
         case 0: _t->applyCornerRadius(); break;
         case 1: _t->applyLineBend(); break;
-        case 2: _t->changeFillPattern((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
-        case 3: _t->chooseColor(); break;
-        case 4: _t->chooseFillColor(); break;
-        case 5: _t->changeLineWidth((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
-        case 6: _t->toggleGrid(); break;
-        case 7: _t->newScene(); break;
-        case 8: _t->openJson(); break;
-        case 9: _t->saveJson(); break;
-        case 10: _t->importSvg(); break;
-        case 11: _t->exportSvg(); break;
-        case 12: _t->runBluePrintAI(); break;
-        case 13: _t->changeCornerRadius((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
-        case 14: _t->zoomIn(); break;
-        case 15: _t->zoomOut(); break;
-        case 16: _t->zoomReset(); break;
-        case 17: _t->zoomToFit(); break;
-        case 18: _t->undo(); break;
-        case 19: _t->redo(); break;
-        case 20: _t->addLayer(); break;
-        case 21: _t->removeSelectedLayer(); break;
-        case 22: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
-        case 23: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
+        case 2: _t->setDimPrecision((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
+        case 3: _t->changeFillPattern((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
+        case 4: _t->chooseColor(); break;
+        case 5: _t->chooseFillColor(); break;
+        case 6: _t->changeLineWidth((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
+        case 7: _t->toggleGrid(); break;
+        case 8: _t->newScene(); break;
+        case 9: _t->openJson(); break;
+        case 10: _t->saveJson(); break;
+        case 11: _t->importSvg(); break;
+        case 12: _t->exportSvg(); break;
+        case 13: _t->runBluePrintAI(); break;
+        case 14: _t->changeCornerRadius((*reinterpret_cast< std::add_pointer_t<double>>(_a[1]))); break;
+        case 15: _t->zoomIn(); break;
+        case 16: _t->zoomOut(); break;
+        case 17: _t->zoomReset(); break;
+        case 18: _t->zoomToFit(); break;
+        case 19: _t->undo(); break;
+        case 20: _t->redo(); break;
+        case 21: _t->addLayer(); break;
+        case 22: _t->removeSelectedLayer(); break;
+        case 23: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
+        case 24: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
         default: ;
         }
     }
@@ -203,14 +210,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 24)
+        if (_id < 25)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 24;
+        _id -= 25;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 24)
+        if (_id < 25)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 24;
+        _id -= 25;
     }
     return _id;
 }

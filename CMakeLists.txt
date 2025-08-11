@@ -33,6 +33,14 @@ target_link_libraries(${PROJECT_NAME}
   Qt6::Network
 )
 
+target_sources(DraftAI PRIVATE
+    src/canvas/DrawingCanvas.cpp
+    src/canvas/DrawingCanvas.h
+    src/dim/LinearDimItem.cpp
+    src/dim/LinearDimItem.h
+    src/dim/AnchorPoint.h
+)
+
 # Includes
 target_include_directories(${PROJECT_NAME} PRIVATE
   src

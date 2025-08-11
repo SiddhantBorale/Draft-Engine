@@ -81,6 +81,19 @@ void MainWindow::setupToolPanel()
     addToolBtn("Rect (R)"   , DrawingCanvas::Tool::Rect);
     addToolBtn("Ellipse (C)", DrawingCanvas::Tool::Ellipse);
     addToolBtn("Polygon (P)", DrawingCanvas::Tool::Polygon);
+    addToolBtn("Dim (D)", DrawingCanvas::Tool::DimLinear);
+
+    auto* precRow = new QWidget(toolWidget);
+    auto* precLay = new QHBoxLayout(precRow);
+    precLay->setContentsMargins(0,0,0,0);
+    precLay->addWidget(new QLabel("Dim precision:", precRow));
+    auto* precSpin = new QSpinBox(precRow);
+    precSpin->setRange(0, 6);
+    precSpin->setValue(2);
+    connect(precSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &MainWindow::setDimPrecision);
+    precLay->addWidget(precSpin);
+    v->addWidget(precRow);
 
     // Stroke color
     auto* strokeBtn = new QPushButton("Stroke Color", toolWidget);
@@ -509,4 +522,8 @@ void MainWindow::changeCornerRadius(double r) {
         m_canvas->setSelectedCornerRadius(r);
         m_canvas->refreshHandles(); // re-place radius knobs
     }
+}
+
+void MainWindow::setDimPrecision(int p) {
+    m_canvas->setDimPrecision(p);
 }

@@ -1,4 +1,6 @@
 #include "DrawingCanvas.h"
+#include "dim/AnchorPoint.h"
+#include "dim/LinearDimItem.h"
 
 #include <QScrollBar>
 #include <QKeyEvent>
@@ -94,12 +96,14 @@ namespace {
 static QString colorToHex(const QColor& c) { return c.name(QColor::HexArgb); }
 static QColor  hexToColor(const QString& s){ QColor c(s); return c.isValid()? c : QColor(Qt::black); }
 
+
 //--------------------------------------------------------------
 // ctor
 //--------------------------------------------------------------
 DrawingCanvas::DrawingCanvas(QWidget* parent)
     : QGraphicsView(parent),
       m_scene(new QGraphicsScene(this))
+
 {
     setScene(m_scene);
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]{
@@ -110,6 +114,14 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
     setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setDragMode(QGraphicsView::RubberBandDrag);
+    
+    m_dimStyle.pen = QPen(Qt::darkGray, 0);
+    m_dimStyle.font = QFont("Menlo", 9);
+    m_dimStyle.arrowSize = 8.0;
+    m_dimStyle.precision = 2;
+    m_dimStyle.unit = "mm";
+    m_dimStyle.showUnits = true;
+
     setFocusPolicy(Qt::StrongFocus);
     viewport()->setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -342,7 +354,79 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
     const QPointF sceneP  = mapToScene(e->pos());
     const QPointF snapped = snap(sceneP);
 
-    // Selection mode: try handles first, then normal selection
+    /* ───────────── Linear Dimension (three clicks) ───────────── */
+    if (m_tool == Tool::DimLinear) {
+    const QPointF snapP = snapped;
+
+    // First click → create first anchor (parent to hit item if any)
+    if (!m_dimA) {
+        QGraphicsItem* hit = nullptr;
+        const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
+        for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
+
+        m_dimA = new AnchorPoint(hit);
+        if (!hit) {
+            m_dimA->setPos(snapP);
+            m_scene->addItem(m_dimA);           // only add if no parent
+        }
+        e->accept();
+        return;
+    }
+
+    // Second click → create second anchor
+    if (!m_dimB) {
+        QGraphicsItem* hit = nullptr;
+        const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
+        for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
+
+        m_dimB = new AnchorPoint(hit);
+        if (!hit) {
+            m_dimB->setPos(snapP);
+            m_scene->addItem(m_dimB);           // only add if no parent
+        }
+        e->accept();
+        return;
+    }
+
+    // Third click → compute perpendicular offset and place dimension
+    const QPointF a = m_dimA->scenePos();
+    const QPointF b = m_dimB->scenePos();
+
+    const QPointF d = b - a;
+    const double  len = std::hypot(d.x(), d.y());
+    qreal off = 0.0;
+    if (len > 1e-6) {
+        const QPointF n(-d.y()/len, d.x()/len); // left normal
+        const QPointF mid = (a + b) * 0.5;
+        const QPointF v = snapP - mid;
+        off = v.x()*n.x() + v.y()*n.y();        // signed offset
+    }
+    m_dimOffset = off;
+
+    auto* dim = new LinearDimItem(a, b);
+    dim->setOffset(m_dimOffset);
+    dim->setStyle(m_dimStyle);
+    dim->setData(0, m_layer);
+    dim->setFlags(QGraphicsItem::ItemIsSelectable);
+    m_scene->addItem(dim);                      // add ONCE
+
+    // Clean up anchors: remove only if they were free anchors (no parent)
+    if (m_dimA) {
+        if (!m_dimA->parentItem() && m_dimA->scene() == m_scene)
+            m_scene->removeItem(m_dimA);
+        delete m_dimA; m_dimA = nullptr;
+    }
+    if (m_dimB) {
+        if (!m_dimB->parentItem() && m_dimB->scene() == m_scene)
+            m_scene->removeItem(m_dimB);
+        delete m_dimB; m_dimB = nullptr;
+    }
+
+    e->accept();
+    return;
+}
+
+    /* ───────────── Select tool (handles & move tracking) ───────────── */
     if (m_tool == Tool::Select) {
         // Try to grab a handle (resize/rotate/bend)
         if (handleMousePress(sceneP, e->button())) {
@@ -350,7 +434,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
             return;
         }
 
-        // Track positions for move undo
+        // Track old positions for move-undo
         m_moveItems.clear();
         m_moveOldPos.clear();
         for (QGraphicsItem* it : m_scene->selectedItems()) {
@@ -367,7 +451,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         return;
     }
 
-    // Drawing tools
+    /* ───────────── Drawing tools ───────────── */
     setDragMode(QGraphicsView::NoDrag);
 
     switch (m_tool) {
@@ -407,7 +491,6 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
     case Tool::Polygon: {
-        // Right click finishes
         if (e->button() == Qt::RightButton) {
             if (m_polyActive && m_poly.size() > 2) {
                 if (auto* polyItem = qgraphicsitem_cast<QGraphicsPolygonItem*>(m_tempItem)) {
@@ -447,6 +530,7 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
         break;
     }
 }
+
 
 
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
