@@ -485,36 +485,6 @@ void MainWindow::runBluePrintAI()
     connect(reply, &QNetworkReply::finished, this, &MainWindow::onVectoriseFinished);
 }
 
-void MainWindow::onVectoriseFinished()
-{
-    auto* reply = qobject_cast<QNetworkReply*>(sender());
-    if (!reply) return;
-    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    const QByteArray data = reply->readAll();
-    reply->deleteLater();
-
-    if (status < 200 || status >= 300) {
-        QMessageBox::warning(this, "Vectorise",
-                             QString("Server error (%1): %2").arg(status).arg(QString::fromUtf8(data)));
-        return;
-    }
-
-    QJsonParseError perr{};
-    QJsonDocument doc = QJsonDocument::fromJson(data, &perr);
-    if (perr.error != QJsonParseError::NoError) {
-        QMessageBox::warning(this, "Vectorise",
-                             QString("Bad JSON: %1").arg(perr.errorString()));
-        return;
-    }
-
-    // Load into canvas (replaces scene). If you prefer merging, say the word and I'll switch it.
-    m_canvas->loadFromJson(doc);
-
-    // Fit view nicely
-    m_canvas->fitInView(m_canvas->scene()->itemsBoundingRect().marginsAdded(QMarginsF(50,50,50,50)),
-                        Qt::KeepAspectRatio);
-}
-
 
 void MainWindow::onVectoriseFinished()
 {
