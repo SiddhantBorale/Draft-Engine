@@ -59,6 +59,9 @@ private slots:
     void setCurrentLayerFromTree(QTreeWidgetItem* it, QTreeWidgetItem* prev);
     void layerItemChanged(QTreeWidgetItem* it, int column);
 
+    void refineVector();  // auto-clean pass
+
+
 private:
     // UI builders
     QDoubleSpinBox* m_cornerSpin { nullptr }; // NEW

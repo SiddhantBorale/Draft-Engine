@@ -73,7 +73,8 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         "it",
         "prev",
         "layerItemChanged",
-        "column"
+        "column",
+        "refineVector"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -141,6 +142,8 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(34, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { 0x80000000 | 31, 32 }, { QMetaType::Int, 35 },
         }}),
+        // Slot 'refineVector'
+        QtMocHelpers::SlotData<void()>(36, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -190,6 +193,7 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 23: _t->removeSelectedLayer(); break;
         case 24: _t->setCurrentLayerFromTree((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[2]))); break;
         case 25: _t->layerItemChanged((*reinterpret_cast< std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
+        case 26: _t->refineVector(); break;
         default: ;
         }
     }
@@ -214,14 +218,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 26)
+        if (_id < 27)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 26;
+        _id -= 27;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 26)
+        if (_id < 27)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 26;
+        _id -= 27;
     }
     return _id;
 }

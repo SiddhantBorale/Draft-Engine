@@ -27,6 +27,7 @@
 #include <QUndoStack>
 #include <QUndoCommand>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -43,6 +44,12 @@ namespace {
             p.addRoundedRect(r, rx, rx);
         }
         return p;
+    }
+    inline double lineAngleDeg(const QLineF& L) {
+    // angle modulo 180° (we only care about horizontal vs vertical)
+    double a = std::atan2(L.dy(), L.dx()) * 180.0 / M_PI; // [-180,180]
+    if (a < 0) a += 180.0;
+    return a; // [0,180]
     }
 
     // Convert rect->path on first rounding; otherwise return the existing path item.
@@ -1576,3 +1583,171 @@ void DrawingCanvas::refreshHandles()
     layoutHandles();
     viewport()->update();
 }
+
+
+#include <QtMath>
+
+static double angleDeg(const QLineF& L) {
+    // range [0..180)
+    double a = std::fmod(180.0 - L.angle(), 180.0);
+    if (a < 0) a += 180.0;
+    return a;
+}
+static bool near(double v, double target, double eps) {
+    return std::abs(v - target) <= eps;
+}
+static QPointF average(const QVector<QPointF>& pts) {
+    if (pts.isEmpty()) return {};
+    qreal sx=0, sy=0;
+    for (auto& p: pts){ sx+=p.x(); sy+=p.y(); }
+    return QPointF(sx/pts.size(), sy/pts.size());
+}
+
+int DrawingCanvas::refineVector() {
+    return refineVector(RefineParams{}); // defaults
+}
+
+int DrawingCanvas::refineVector(const RefineParams& p)
+{
+    int fixes = 0;
+
+    // 1) collect line items
+    QList<QGraphicsLineItem*> lines;
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it))
+            lines << ln;
+    }
+    if (lines.isEmpty()) return 0;
+
+    const double gap2    = p.gapPx    * p.gapPx;
+    const double merge2  = p.mergePx  * p.mergePx;
+    const double minLen2 = p.minLenPx * p.minLenPx;
+
+    // 2) snap to 0°/90°
+    for (auto* ln : lines) {
+        QLineF L = ln->line();
+        const double ang = lineAngleDeg(L); // [0,180]
+        const double dev = std::min(std::fabs(ang - 0.0), std::fabs(ang - 90.0));
+        if (dev <= p.axisSnapDeg) {
+            if (std::fabs(ang - 90.0) < std::fabs(ang - 0.0)) {
+                const double x = 0.5 * (L.x1() + L.x2());
+                L.setP1(QPointF(x, L.y1()));
+                L.setP2(QPointF(x, L.y2()));
+            } else {
+                const double y = 0.5 * (L.y1() + L.y2());
+                L.setP1(QPointF(L.x1(), y));
+                L.setP2(QPointF(L.x2(), y));
+            }
+            ln->setLine(L);
+            ++fixes;
+        }
+    }
+
+    // 3) delete tiny segments
+    for (auto*& ln : lines) {
+        if (!ln) continue;
+        if (dist2(ln->line().p1(), ln->line().p2()) < minLen2) {
+            m_scene->removeItem(ln); delete ln; ln = nullptr; ++fixes;
+        }
+    }
+    lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
+
+    // 4) close small endpoint gaps
+    struct End {
+        QGraphicsLineItem* ln; bool p1;
+        QPointF pt() const { return p1 ? ln->line().p1() : ln->line().p2(); }
+        void set(const QPointF& p) {
+            QLineF L = ln->line();
+            if (p1) L.setP1(p); else L.setP2(p);
+            ln->setLine(L);
+        }
+    };
+    QVector<End> ends; ends.reserve(lines.size()*2);
+    for (auto* ln : lines) { ends.push_back({ln,true}); ends.push_back({ln,false}); }
+
+    QVector<bool> used(ends.size(), false);
+    for (int i=0;i<ends.size();++i) if (!used[i]) {
+        int best = -1; double best2 = gap2;
+        for (int j=i+1;j<ends.size();++j) if (!used[j]) {
+            double d2 = dist2(ends[i].pt(), ends[j].pt());
+            if (d2 < best2) { best2 = d2; best = j; }
+        }
+        if (best >= 0) {
+            QPointF mid = (ends[i].pt() + ends[best].pt()) * 0.5;
+            ends[i].set(mid); ends[best].set(mid);
+            used[i]=used[best]=true; ++fixes;
+        }
+    }
+
+    // 5) merge collinear segments that share an endpoint
+    const double dirTol = p.axisSnapDeg * M_PI / 180.0;
+    auto collinearEnough = [&](const QLineF& A, const QLineF& B){
+        double a1 = std::atan2(A.dy(), A.dx());
+        double a2 = std::atan2(B.dy(), B.dx());
+        double d  = std::fabs(a1 - a2);
+        d = std::min(d, M_PI - d);
+        return d <= dirTol;
+    };
+    for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
+        auto* A = lines[i]; auto* B = lines[j];
+        if (!A || !B) continue;
+        QLineF La = A->line(), Lb = B->line();
+        bool share =
+            dist2(La.p1(), Lb.p1()) <= merge2 || dist2(La.p1(), Lb.p2()) <= merge2 ||
+            dist2(La.p2(), Lb.p1()) <= merge2 || dist2(La.p2(), Lb.p2()) <= merge2;
+        if (!share || !collinearEnough(La, Lb)) continue;
+
+        QVector<QPointF> pts{La.p1(), La.p2(), Lb.p1(), Lb.p2()};
+        const bool horiz = std::fabs(La.dy()) < std::fabs(La.dx());
+        std::sort(pts.begin(), pts.end(), [&](const QPointF& u, const QPointF& v){
+            return horiz ? (u.x() < v.x()) : (u.y() < v.y());
+        });
+        A->setLine(QLineF(pts.front(), pts.back()));
+        m_scene->removeItem(B); delete B; lines[j] = nullptr; ++fixes;
+    }
+    lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
+
+    // 6) extend endpoints to meet nearby segments (T intersections)
+    const double extend2 = p.extendPx * p.extendPx;
+    for (auto* ln : lines) {
+        QLineF L = ln->line();
+        for (auto* other : lines) {
+            if (ln == other) continue;
+            QLineF M = other->line();
+            for (int k=0;k<2;++k) {
+                QPointF P = (k==0 ? L.p1() : L.p2());
+                double t=0;
+                QPointF Q = projectPointOnSegment(P, M.p1(), M.p2(), &t);
+                if (t > 0.0 && t < 1.0 && dist2(P, Q) <= extend2) {
+                    if (k==0) L.setP1(Q); else L.setP2(Q);
+                    ++fixes;
+                }
+            }
+        }
+        ln->setLine(L);
+    }
+
+    scene()->update();
+    viewport()->update();
+    return fixes;
+}
+
+
+double DrawingCanvas::dist2(const QPointF& a, const QPointF& b) {
+    const double dx = a.x() - b.x();
+    const double dy = a.y() - b.y();
+    return dx*dx + dy*dy;
+}
+
+QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
+                                             const QPointF& a,
+                                             const QPointF& b,
+                                             double* tOut) {
+    const QPointF ab = b - a;
+    const double  ab2 = ab.x()*ab.x() + ab.y()*ab.y();
+    if (ab2 <= 1e-12) { if (tOut) *tOut = 0.0; return a; }
+    const double t = std::clamp(((p-a).x()*ab.x() + (p-a).y()*ab.y())/ab2, 0.0, 1.0);
+    if (tOut) *tOut = t;
+    return a + ab * t;
+}
+

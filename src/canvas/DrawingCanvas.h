@@ -57,10 +57,22 @@ private:
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
 public:
+    struct RefineParams {
+        // keep these names to match DrawingCanvas.cpp
+        double gapPx       = 8.0;   // endpoint snap radius (px)
+        double mergePx     = 6.0;   // treat endpoints as same if within this (px)
+        double extendPx    = 10.0;  // extend to meet nearby segments within (px)
+        double axisSnapDeg = 6.0;   // snap to 0°/90° if within this many degrees
+        double minLenPx    = 12.0;  // delete segments shorter than this (px)
+    };
+
+
     enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear };
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
+    int refineVector();
+    int refineVector(const RefineParams& p);
     void setDimUnits(const QString& u) { m_dimStyle.unit = u; }
     void setDimPrecision(int p) { m_dimStyle.precision = std::clamp(p,0,6); }
     void refreshHandles();                  // NEW: safe public wrapper
@@ -145,6 +157,14 @@ private:
         } type;
         QGraphicsRectItem* item { nullptr };
     };
+
+    using Key = QPair<qint64,qint64>;
+    static Key keyOf(const QPointF& p, double tol) {
+        return Key{ llround(p.x()/tol), llround(p.y()/tol) };
+    }
+    static double deg(double rad) { return rad * 180.0 / M_PI; }
+    static double rad(double deg) { return deg * M_PI / 180.0; }
+
     void createHandlesForSelected();
     void clearHandles();
     void layoutHandles();
@@ -162,6 +182,14 @@ private:
     struct LayerState { bool visible = true; bool locked = false; };
     void ensureLayer(int id);
     void applyLayerStateToItem(QGraphicsItem* it, int id);
+
+    static inline double sqr(double v) { return v*v; }
+
+    static double   dist2   (const QPointF& a, const QPointF& b);
+    static QPointF  projectPointOnSegment(const QPointF& p,
+                                          const QPointF& a,
+                                          const QPointF& b,
+                                          double* tOut=nullptr);
 
 private:
     QGraphicsScene* m_scene { nullptr };

@@ -100,6 +100,16 @@ void MainWindow::setupToolPanel()
     precLay->addWidget(precSpin);
     v->addWidget(precRow);
 
+    // Tools dock (somewhere you add your buttons)
+    auto* refineBtn = new QPushButton("Refine Vector", toolWidget);
+    connect(refineBtn, &QPushButton::clicked, this, &MainWindow::refineVector);
+    v->addWidget(refineBtn);
+
+    // Or menu:
+    auto* ai = menuBar()->addMenu("&AI");
+    ai->addAction("Refine Vector", QKeySequence("Ctrl+Shift+R"), this, &MainWindow::refineVector);
+
+
     // Stroke color
     auto* strokeBtn = new QPushButton("Stroke Color", toolWidget);
     connect(strokeBtn, &QPushButton::clicked, this, &MainWindow::chooseColor);
@@ -420,21 +430,6 @@ void MainWindow::exportSvg()
     if (!fn.isEmpty()) m_canvas->exportSvg(fn);
 }
 
-/* Blueprint-to-vector stub */
-#include "MainWindow.h"
-#include "canvas/DrawingCanvas.h"
-#include <QFileDialog>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QHttpMultiPart>
-#include <QMessageBox>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-
-// ...
-
 void MainWindow::runBluePrintAI()
 {
     const QString fn = QFileDialog::getOpenFileName(
@@ -453,7 +448,6 @@ void MainWindow::runBluePrintAI()
                          (ext == "png") ? "image/png" :
                          (ext == "bmp") ? "image/bmp" : "application/octet-stream";
     imagePart.setHeader(QNetworkRequest::ContentTypeHeader, mime);
-
     auto* file = new QFile(fn);
     if (!file->open(QIODevice::ReadOnly)) {
         QMessageBox::warning(this, "Vectorise", "Could not open file.");
@@ -465,7 +459,7 @@ void MainWindow::runBluePrintAI()
     file->setParent(multi);
     multi->append(imagePart);
 
-    // optional tuning (form fields)
+    // helper to add numeric fields
     auto addField = [&](const char* name, const QByteArray& val){
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
@@ -473,17 +467,26 @@ void MainWindow::runBluePrintAI()
         p.setBody(val);
         multi->append(p);
     };
-    addField("min_line_len", QByteArray::number(40));
-    addField("canny1",       QByteArray::number(80));
-    addField("canny2",       QByteArray::number(160));
-    addField("approx_eps",   QByteArray::number(2.0));
+
+    // tuned defaults for floor plans (feel free to expose as UI later)
+    addField("min_line_len", QByteArray::number(55));   // longer segments
+    addField("canny1",       QByteArray::number(60));
+    addField("canny2",       QByteArray::number(140));
+    addField("approx_eps",   QByteArray::number(0.012)); // 1.2% of perimeter
+    addField("close_radius", QByteArray::number(3));     // px
+    addField("min_poly_area",QByteArray::number(300));   // px^2
+    addField("merge_angle",  QByteArray::number(6.0));   // deg
+    addField("merge_dist",   QByteArray::number(6.0));   // px
 
     QNetworkRequest req(QUrl("http://127.0.0.1:8000/vectorise"));
     auto* reply = m_net->post(req, multi);
     multi->setParent(reply);
 
     connect(reply, &QNetworkReply::finished, this, &MainWindow::onVectoriseFinished);
+    statusBar()->showMessage("Vectorising…");
 }
+
+
 
 
 void MainWindow::onVectoriseFinished()
@@ -619,4 +622,17 @@ void MainWindow::changeCornerRadius(double r) {
 
 void MainWindow::setDimPrecision(int p) {
     m_canvas->setDimPrecision(p);
+}
+
+void MainWindow::refineVector()
+{
+    DrawingCanvas::RefineParams params;
+    params.gapPx       = 20.0;  // snap nearby endpoints together (px)
+    params.axisSnapDeg = 12;   // snap near-axis lines to 0° / 90°
+    params.mergePx     = 10;   // merge collinear segments if gap ≤ mergePx
+    params.extendPx    = 25.0;  // extend to intersect if close (px)
+    params.minLenPx    = 1.0;   // drop tiny fragments
+
+    const int edits = m_canvas->refineVector(params);
+    statusBar()->showMessage(QString("Refine complete — %1 edits").arg(edits), 4000);
 }
