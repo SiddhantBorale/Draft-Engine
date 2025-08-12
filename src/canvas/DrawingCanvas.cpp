@@ -1603,140 +1603,61 @@ static QPointF average(const QVector<QPointF>& pts) {
     return QPointF(sx/pts.size(), sy/pts.size());
 }
 
-int DrawingCanvas::refineVector() {
-    return refineVector(RefineParams{}); // defaults
-}
+// Remove nearly-identical duplicate line segments (same endpoints within tol)
 
-int DrawingCanvas::refineVector(const RefineParams& p)
-{
-    int fixes = 0;
-
-    // 1) collect line items
-    QList<QGraphicsLineItem*> lines;
-    for (QGraphicsItem* it : m_scene->items()) {
-        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it))
-            lines << ln;
-    }
-    if (lines.isEmpty()) return 0;
-
-    const double gap2    = p.gapPx    * p.gapPx;
-    const double merge2  = p.mergePx  * p.mergePx;
-    const double minLen2 = p.minLenPx * p.minLenPx;
-
-    // 2) snap to 0°/90°
-    for (auto* ln : lines) {
-        QLineF L = ln->line();
-        const double ang = lineAngleDeg(L); // [0,180]
-        const double dev = std::min(std::fabs(ang - 0.0), std::fabs(ang - 90.0));
-        if (dev <= p.axisSnapDeg) {
-            if (std::fabs(ang - 90.0) < std::fabs(ang - 0.0)) {
-                const double x = 0.5 * (L.x1() + L.x2());
-                L.setP1(QPointF(x, L.y1()));
-                L.setP2(QPointF(x, L.y2()));
-            } else {
-                const double y = 0.5 * (L.y1() + L.y2());
-                L.setP1(QPointF(L.x1(), y));
-                L.setP2(QPointF(L.x2(), y));
-            }
-            ln->setLine(L);
-            ++fixes;
-        }
-    }
-
-    // 3) delete tiny segments
-    for (auto*& ln : lines) {
-        if (!ln) continue;
-        if (dist2(ln->line().p1(), ln->line().p2()) < minLen2) {
-            m_scene->removeItem(ln); delete ln; ln = nullptr; ++fixes;
-        }
-    }
-    lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
-
-    // 4) close small endpoint gaps
-    struct End {
-        QGraphicsLineItem* ln; bool p1;
-        QPointF pt() const { return p1 ? ln->line().p1() : ln->line().p2(); }
-        void set(const QPointF& p) {
-            QLineF L = ln->line();
-            if (p1) L.setP1(p); else L.setP2(p);
-            ln->setLine(L);
-        }
-    };
-    QVector<End> ends; ends.reserve(lines.size()*2);
-    for (auto* ln : lines) { ends.push_back({ln,true}); ends.push_back({ln,false}); }
-
-    QVector<bool> used(ends.size(), false);
-    for (int i=0;i<ends.size();++i) if (!used[i]) {
-        int best = -1; double best2 = gap2;
-        for (int j=i+1;j<ends.size();++j) if (!used[j]) {
-            double d2 = dist2(ends[i].pt(), ends[j].pt());
-            if (d2 < best2) { best2 = d2; best = j; }
-        }
-        if (best >= 0) {
-            QPointF mid = (ends[i].pt() + ends[best].pt()) * 0.5;
-            ends[i].set(mid); ends[best].set(mid);
-            used[i]=used[best]=true; ++fixes;
-        }
-    }
-
-    // 5) merge collinear segments that share an endpoint
-    const double dirTol = p.axisSnapDeg * M_PI / 180.0;
-    auto collinearEnough = [&](const QLineF& A, const QLineF& B){
-        double a1 = std::atan2(A.dy(), A.dx());
-        double a2 = std::atan2(B.dy(), B.dx());
-        double d  = std::fabs(a1 - a2);
-        d = std::min(d, M_PI - d);
-        return d <= dirTol;
-    };
-    for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
-        auto* A = lines[i]; auto* B = lines[j];
-        if (!A || !B) continue;
-        QLineF La = A->line(), Lb = B->line();
-        bool share =
-            dist2(La.p1(), Lb.p1()) <= merge2 || dist2(La.p1(), Lb.p2()) <= merge2 ||
-            dist2(La.p2(), Lb.p1()) <= merge2 || dist2(La.p2(), Lb.p2()) <= merge2;
-        if (!share || !collinearEnough(La, Lb)) continue;
-
-        QVector<QPointF> pts{La.p1(), La.p2(), Lb.p1(), Lb.p2()};
-        const bool horiz = std::fabs(La.dy()) < std::fabs(La.dx());
-        std::sort(pts.begin(), pts.end(), [&](const QPointF& u, const QPointF& v){
-            return horiz ? (u.x() < v.x()) : (u.y() < v.y());
-        });
-        A->setLine(QLineF(pts.front(), pts.back()));
-        m_scene->removeItem(B); delete B; lines[j] = nullptr; ++fixes;
-    }
-    lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
-
-    // 6) extend endpoints to meet nearby segments (T intersections)
-    const double extend2 = p.extendPx * p.extendPx;
-    for (auto* ln : lines) {
-        QLineF L = ln->line();
-        for (auto* other : lines) {
-            if (ln == other) continue;
-            QLineF M = other->line();
-            for (int k=0;k<2;++k) {
-                QPointF P = (k==0 ? L.p1() : L.p2());
-                double t=0;
-                QPointF Q = projectPointOnSegment(P, M.p1(), M.p2(), &t);
-                if (t > 0.0 && t < 1.0 && dist2(P, Q) <= extend2) {
-                    if (k==0) L.setP1(Q); else L.setP2(Q);
-                    ++fixes;
-                }
-            }
-        }
-        ln->setLine(L);
-    }
-
-    scene()->update();
-    viewport()->update();
-    return fixes;
-}
-
-
-double DrawingCanvas::dist2(const QPointF& a, const QPointF& b) {
+static inline double dist2(const QPointF& a, const QPointF& b) {
     const double dx = a.x() - b.x();
     const double dy = a.y() - b.y();
     return dx*dx + dy*dy;
+}
+static inline bool nearPt(const QPointF& a, const QPointF& b, double tolPx) {
+    return dist2(a,b) <= tolPx*tolPx;
+}
+// Duplicate-line check with endpoint tolerance (direction-agnostic)
+static inline bool nearLineDuplicate(const QLineF& A, const QLineF& B, double tolPx)
+{
+    const auto nearPt2 = [](const QPointF& u, const QPointF& v, double t){
+        const double dx = u.x() - v.x();
+        const double dy = u.y() - v.y();
+        return dx*dx + dy*dy <= t*t;
+    };
+    // Same direction or reversed direction both count as duplicates
+    const bool sameEnds =
+        nearPt2(A.p1(), B.p1(), tolPx) && nearPt2(A.p2(), B.p2(), tolPx);
+    const bool swappedEnds =
+        nearPt2(A.p1(), B.p2(), tolPx) && nearPt2(A.p2(), B.p1(), tolPx);
+    return sameEnds || swappedEnds;
+}
+
+static int removeDuplicateSegments(QGraphicsScene* scene, double tolPx)
+{
+    auto items = scene->items(); // Z-order doesn’t matter for us
+    // Collect all lines with their pointers for safe deletion later
+    struct LRef { QGraphicsLineItem* it; QLineF L; };
+    QVector<LRef> lines; lines.reserve(items.size());
+    for (QGraphicsItem* it : items) {
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+            lines.push_back({ln, ln->line()});
+        }
+    }
+
+    int removed = 0;
+    QVector<bool> dead(lines.size(), false);
+
+    for (int i = 0; i < lines.size(); ++i) {
+        if (dead[i]) continue;
+        for (int j = i + 1; j < lines.size(); ++j) {
+            if (dead[j]) continue;
+            if (nearLineDuplicate(lines[i].L, lines[j].L, tolPx)) {
+                // Prefer keeping the thicker/visible one; simple rule: keep i, drop j
+                scene->removeItem(lines[j].it);
+                delete lines[j].it;
+                dead[j] = true;
+                ++removed;
+            }
+        }
+    }
+    return removed;
 }
 
 QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
@@ -1750,4 +1671,193 @@ QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
     if (tOut) *tOut = t;
     return a + ab * t;
 }
+
+
+
+int DrawingCanvas::refineVector() {
+    return refineVector(RefineParams{}); // defaults
+}
+
+int DrawingCanvas::refineVector(const RefineParams& p)
+{
+    auto dist2 = [](const QPointF& a, const QPointF& b) {
+        const double dx = a.x() - b.x();
+        const double dy = a.y() - b.y();
+        return dx*dx + dy*dy;
+    };
+    auto lineAngleDeg = [](const QLineF& L) {
+        // [0,180] regardless of direction
+        double ang = std::fmod(std::atan2(L.dy(), L.dx()) * 180.0/M_PI + 360.0, 360.0);
+        if (ang < 0) ang += 360.0;
+        if (ang > 180.0) ang -= 180.0;
+        return ang;
+    };
+    auto project = [&](const QPointF& P, const QPointF& A, const QPointF& B, double* tOut) {
+        const double vx = B.x() - A.x();
+        const double vy = B.y() - A.y();
+        const double wx = P.x() - A.x();
+        const double wy = P.y() - A.y();
+        const double vv = vx*vx + vy*vy;
+        double t = (vv > 0.0) ? (wx*vx + wy*vy) / vv : 0.0;
+        t = std::max(0.0, std::min(1.0, t));
+        if (tOut) *tOut = t;
+        return QPointF(A.x() + t*vx, A.y() + t*vy);
+    };
+    auto nearPt = [&](const QPointF& a, const QPointF& b, double tolPx){ return dist2(a,b) <= tolPx*tolPx; };
+    auto nearDup = [&](const QLineF& A, const QLineF& B, double tolPx){
+        return (nearPt(A.p1(), B.p1(), tolPx) && nearPt(A.p2(), B.p2(), tolPx)) ||
+               (nearPt(A.p1(), B.p2(), tolPx) && nearPt(A.p2(), B.p1(), tolPx));
+    };
+
+    int totalFixes = 0;
+
+    for (int pass = 0; pass < std::max(1, p.maxPasses); ++pass) {
+        int fixes = 0;
+
+        // 1) collect line items fresh each pass
+        QList<QGraphicsLineItem*> lines;
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it))
+                lines << ln;
+        }
+        if (lines.isEmpty()) break;
+
+        const double gap2    = p.gapPx    * p.gapPx;
+        const double merge2  = p.mergePx  * p.mergePx;
+        const double minLen2 = p.minLenPx * p.minLenPx;
+
+        // 2) snap to 0°/90° (treat 180° as 0°)
+        for (auto* ln : lines) {
+            QLineF L = ln->line();
+            const double ang = lineAngleDeg(L); // [0,180]
+            const double d0  = std::min(std::abs(ang - 0.0), std::abs(ang - 180.0));
+            const double d90 = std::abs(ang - 90.0);
+            const double dev = std::min(d0, d90);
+
+            if (dev <= p.axisSnapDeg) {
+                if (d90 < d0) {
+                    // vertical: x aligned
+                    const double x = 0.5 * (L.x1() + L.x2());
+                    L.setP1(QPointF(x, L.y1()));
+                    L.setP2(QPointF(x, L.y2()));
+                } else {
+                    // horizontal: y aligned
+                    const double y = 0.5 * (L.y1() + L.y2());
+                    L.setP1(QPointF(L.x1(), y));
+                    L.setP2(QPointF(L.x2(), y));
+                }
+                ln->setLine(L);
+                ++fixes;
+            }
+        }
+
+        // 3) delete tiny segments
+        for (auto*& ln : lines) {
+            if (!ln) continue;
+            if (dist2(ln->line().p1(), ln->line().p2()) < minLen2) {
+                m_scene->removeItem(ln);
+                delete ln;
+                ln = nullptr;
+                ++fixes;
+            }
+        }
+        lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
+
+        // 4) close small endpoint gaps (pairwise nearest)
+        struct End {
+            QGraphicsLineItem* ln; bool p1;
+            QPointF pt() const { return p1 ? ln->line().p1() : ln->line().p2(); }
+            void set(const QPointF& p) {
+                QLineF L = ln->line();
+                if (p1) L.setP1(p); else L.setP2(p);
+                ln->setLine(L);
+            }
+        };
+        QVector<End> ends; ends.reserve(lines.size()*2);
+        for (auto* ln : lines) { ends.push_back({ln,true}); ends.push_back({ln,false}); }
+
+        QVector<bool> used(ends.size(), false);
+        for (int i=0;i<ends.size();++i) if (!used[i]) {
+            int best = -1; double best2 = gap2;
+            for (int j=i+1;j<ends.size();++j) if (!used[j]) {
+                double d2 = dist2(ends[i].pt(), ends[j].pt());
+                if (d2 < best2) { best2 = d2; best = j; }
+            }
+            if (best >= 0) {
+                QPointF mid = (ends[i].pt() + ends[best].pt()) * 0.5;
+                ends[i].set(mid); ends[best].set(mid);
+                used[i]=used[best]=true; ++fixes;
+            }
+        }
+
+        // 5) merge collinear segments that share an endpoint
+        const double dirTol = p.axisSnapDeg * M_PI / 180.0;
+        auto collinearEnough = [&](const QLineF& A, const QLineF& B){
+            double a1 = std::atan2(A.dy(), A.dx());
+            double a2 = std::atan2(B.dy(), B.dx());
+            double d  = std::fabs(a1 - a2);
+            d = std::min(d, M_PI - d);
+            return d <= dirTol;
+        };
+        for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
+            auto* A = lines[i]; auto* B = lines[j];
+            if (!A || !B) continue;
+            QLineF La = A->line(), Lb = B->line();
+            bool share =
+                dist2(La.p1(), Lb.p1()) <= merge2 || dist2(La.p1(), Lb.p2()) <= merge2 ||
+                dist2(La.p2(), Lb.p1()) <= merge2 || dist2(La.p2(), Lb.p2()) <= merge2;
+            if (!share || !collinearEnough(La, Lb)) continue;
+
+            QVector<QPointF> pts{La.p1(), La.p2(), Lb.p1(), Lb.p2()};
+            const bool horiz = std::fabs(La.dy()) < std::fabs(La.dx());
+            std::sort(pts.begin(), pts.end(), [&](const QPointF& u, const QPointF& v){
+                return horiz ? (u.x() < v.x()) : (u.y() < v.y());
+            });
+            A->setLine(QLineF(pts.front(), pts.back()));
+            m_scene->removeItem(B); delete B; lines[j] = nullptr; ++fixes;
+        }
+        lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
+
+        // 6) extend endpoints to meet nearby segments (T intersections)
+        const double extend2 = p.extendPx * p.extendPx;
+        for (auto* ln : lines) {
+            QLineF L = ln->line();
+            for (auto* other : lines) {
+                if (ln == other) continue;
+                QLineF M = other->line();
+                for (int k=0;k<2;++k) {
+                    QPointF P = (k==0 ? L.p1() : L.p2());
+                    double t=0;
+                    QPointF Q = project(P, M.p1(), M.p2(), &t);
+                    if (t > 0.0 && t < 1.0 && dist2(P, Q) <= extend2) {
+                        if (k==0) L.setP1(Q); else L.setP2(Q);
+                        ++fixes;
+                    }
+                }
+            }
+            ln->setLine(L);
+        }
+
+        // 7) remove near-identical duplicates
+        if (!lines.isEmpty() && p.dupPx > 0.0) {
+            for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
+                auto* A = lines[i]; auto* B = lines[j];
+                if (!A || !B) continue;
+                if (nearDup(A->line(), B->line(), p.dupPx)) {
+                    m_scene->removeItem(B); delete B; lines[j] = nullptr; ++fixes;
+                }
+            }
+        }
+
+        totalFixes += fixes;
+        if (fixes == 0) break; // converged, stop early
+    }
+
+    m_scene->update();
+    viewport()->update();
+    return totalFixes;
+}
+
+
+
 

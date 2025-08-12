@@ -64,7 +64,10 @@ public:
         double extendPx    = 10.0;  // extend to meet nearby segments within (px)
         double axisSnapDeg = 6.0;   // snap to 0°/90° if within this many degrees
         double minLenPx    = 12.0;  // delete segments shorter than this (px)
+        double dupPx       = 1.5;  // consider segments duplicates if both endpoints match within this px (order-agnostic)
+        int    maxPasses   = 3;    // run the refine pass multiple times
     };
+    
 
 
     enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear };
