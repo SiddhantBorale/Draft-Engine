@@ -448,6 +448,7 @@ void MainWindow::runBluePrintAI()
                          (ext == "png") ? "image/png" :
                          (ext == "bmp") ? "image/bmp" : "application/octet-stream";
     imagePart.setHeader(QNetworkRequest::ContentTypeHeader, mime);
+
     auto* file = new QFile(fn);
     if (!file->open(QIODevice::ReadOnly)) {
         QMessageBox::warning(this, "Vectorise", "Could not open file.");
@@ -459,7 +460,6 @@ void MainWindow::runBluePrintAI()
     file->setParent(multi);
     multi->append(imagePart);
 
-    // helper to add numeric fields
     auto addField = [&](const char* name, const QByteArray& val){
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
@@ -468,22 +468,23 @@ void MainWindow::runBluePrintAI()
         multi->append(p);
     };
 
-    // tuned defaults for floor plans (feel free to expose as UI later)
-    addField("min_line_len", QByteArray::number(55));   // longer segments
-    addField("canny1",       QByteArray::number(60));
-    addField("canny2",       QByteArray::number(140));
-    addField("approx_eps",   QByteArray::number(0.012)); // 1.2% of perimeter
-    addField("close_radius", QByteArray::number(3));     // px
-    addField("min_poly_area",QByteArray::number(300));   // px^2
-    addField("merge_angle",  QByteArray::number(6.0));   // deg
-    addField("merge_dist",   QByteArray::number(6.0));   // px
+    // Line/edge params
+    addField("min_line_len", QByteArray::number(36));   // a touch shorter to pick broken walls
+    addField("canny1",       QByteArray::number(70));
+    addField("canny2",       QByteArray::number(160));
+    addField("approx_eps",   QByteArray::number(2.0));
+
+    // NEW toggles
+    addField("text_suppr",       "1");
+    addField("side_denoise_on",  "1");
+    addField("door_simpl",       "1");
+    addField("room_close",       "1");
 
     QNetworkRequest req(QUrl("http://127.0.0.1:8000/vectorise"));
     auto* reply = m_net->post(req, multi);
     multi->setParent(reply);
 
     connect(reply, &QNetworkReply::finished, this, &MainWindow::onVectoriseFinished);
-    statusBar()->showMessage("Vectorising…");
 }
 
 
@@ -627,10 +628,10 @@ void MainWindow::setDimPrecision(int p) {
 void MainWindow::refineVector()
 {
     DrawingCanvas::RefineParams params;
-    params.gapPx       = 20.0;  // snap nearby endpoints together (px)
-    params.axisSnapDeg = 12;   // snap near-axis lines to 0° / 90°
+    params.gapPx       = 12.0;  // snap nearby endpoints together (px)
+    params.axisSnapDeg = 7.5;   // snap near-axis lines to 0° / 90°
     params.mergePx     = 10;   // merge collinear segments if gap ≤ mergePx
-    params.extendPx    = 25.0;  // extend to intersect if close (px)
+    params.extendPx    = 10.0;  // extend to intersect if close (px)
     params.minLenPx    = 1.0;   // drop tiny fragments
 
     const int edits = m_canvas->refineVector(params);
