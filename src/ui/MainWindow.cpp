@@ -479,6 +479,9 @@ void MainWindow::runBluePrintAI()
     addField("side_denoise_on",  "1");
     addField("door_simpl",       "1");
     addField("room_close",       "1");
+    addField("text_suppr",      QByteArray::number(1));
+    addField("side_denoise_on", QByteArray::number(1));
+    addField("use_mlsd",        QByteArray::number(1));       // turn M-LSD on
 
     QNetworkRequest req(QUrl("http://127.0.0.1:8000/vectorise"));
     auto* reply = m_net->post(req, multi);
