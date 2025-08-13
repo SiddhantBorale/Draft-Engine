@@ -58,15 +58,20 @@ class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
 public:
     struct RefineParams {
-        // keep these names to match DrawingCanvas.cpp
-        double gapPx       = 8.0;   // endpoint snap radius (px)
-        double mergePx     = 6.0;   // treat endpoints as same if within this (px)
-        double extendPx    = 10.0;  // extend to meet nearby segments within (px)
-        double axisSnapDeg = 6.0;   // snap to 0°/90° if within this many degrees
-        double minLenPx    = 12.0;  // delete segments shorter than this (px)
-        double dupPx       = 1.5;  // consider segments duplicates if both endpoints match within this px (order-agnostic)
-        int    maxPasses   = 3;    // run the refine pass multiple times
-    };
+    // distances (pixels)
+    double gapPx            = 6.0;   // close endpoints if within this
+    double mergePx          = 4.0;   // treat endpoints as same if within this
+    double extendPx         = 6.0;   // extend endpoints to hit a nearby segment
+    double minLenPx         = 6.0;   // delete segments shorter than this
+    double collinearOverlapPx = 4.0; // need at least this 1-D overlap to merge
+
+    // angles
+    double axisSnapDeg      = 2.0;   // snap to 0/90 only if within this
+    double axisSnapMinLen   = 48.0;  // but only if the segment is at least this long
+    double extendAngleDeg   = 15.0;  // allow extending only if near 90°±this to the target
+
+    // (You can make presets by copying and tweaking these numbers.)
+};
     
 
 
@@ -188,11 +193,13 @@ private:
 
     static inline double sqr(double v) { return v*v; }
 
-    static double   dist2   (const QPointF& a, const QPointF& b);
-    static QPointF  projectPointOnSegment(const QPointF& p,
-                                          const QPointF& a,
-                                          const QPointF& b,
-                                          double* tOut=nullptr);
+    // geometry helpers used by refineVector
+    // static double  dist2(const QPointF& a, const QPointF& b);
+    static QPointF projectPointOnSegment(const QPointF& p,
+                                     const QPointF& a,
+                                     const QPointF& b,
+                                     double* tOut = nullptr);
+
 
 private:
     QGraphicsScene* m_scene { nullptr };
