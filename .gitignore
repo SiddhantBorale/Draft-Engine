@@ -11,7 +11,11 @@ CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
 external
-*venv/
+src/ai/.venv/
+src/ai/__pycache__
+.venv
+build
+testing
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
