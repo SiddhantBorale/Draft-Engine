@@ -2052,6 +2052,355 @@ int DrawingCanvas::refineOverlapsLight(double tolPx, double coverage, double axi
     return removed;
 }
 
+// ---------- Refine (preview) utilities ----------
 
+QList<QGraphicsLineItem*> DrawingCanvas::collectLineItems() const
+{
+    QList<QGraphicsLineItem*> out;
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+            const int layerId = it->data(0).toInt();
+            const bool vis    = isLayerVisible(layerId);
+            const bool locked = isLayerLocked(layerId);
+            if (vis && !locked) out << ln;
+        }
+    }
+    return out;
+}
+
+static inline double dcAngleDeg(const QLineF& L) {
+    double a = std::atan2(L.dy(), L.dx()) * 180.0 / M_PI; // [-180,180)
+    if (a < 0) a += 180.0;                                // [0,180)
+    return a;
+}
+static inline void dcAxisSnap(QLineF& L, double axisSnapDeg)
+{
+    const double ang = dcAngleDeg(L);
+    const double d0  = std::fabs(ang - 0.0);
+    const double d90 = std::fabs(ang - 90.0);
+    if (std::min(d0, d90) > axisSnapDeg) return;
+
+    if (d90 < d0) { // vertical
+        const double x = 0.5*(L.x1()+L.x2());
+        L.setP1(QPointF(x, L.y1()));
+        L.setP2(QPointF(x, L.y2()));
+    } else {        // horizontal
+        const double y = 0.5*(L.y1()+L.y2());
+        L.setP1(QPointF(L.x1(), y));
+        L.setP2(QPointF(L.x2(), y));
+    }
+}
+
+void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
+                                         const RefineParams& p,
+                                         QVector<QLineF>& outNew,
+                                         QVector<QLineF>& outClosures,
+                                         QVector<int>& outDeleteIdx)
+{
+    outNew.clear();
+    outClosures.clear();
+    outDeleteIdx.clear();
+    if (lines.isEmpty()) return;
+
+    // ------- 1) Weld endpoints using a small grid bucket -------
+    struct End { int li; bool p1; QPointF pos; int vid = -1; };
+    QVector<End> ends; ends.reserve(lines.size()*2);
+    for (int i=0;i<lines.size();++i) {
+        QLineF L = lines[i]->line();
+        ends.push_back({i,true,  L.p1(), -1});
+        ends.push_back({i,false, L.p2(), -1});
+    }
+    const double tol  = std::max(0.5, p.weldTolPx);
+    const double cell = std::max(1.0, tol);
+
+    auto cellKey = [&](const QPointF& q)->qint64 {
+        const qint64 gx = static_cast<qint64>(std::floor(q.x()/cell));
+        const qint64 gy = static_cast<qint64>(std::floor(q.y()/cell));
+        return (gx<<32) ^ (gy & 0xffffffff);
+    };
+
+    QHash<qint64, QVector<int>> buckets;
+    QVector<QPointF> vSum;  // running sum per vertex
+    QVector<int>     vCnt;
+
+    auto nearbyVerts = [&](const QPointF& q)->QVector<int> {
+        QVector<int> idxs;
+        const qint64 gx = static_cast<qint64>(std::floor(q.x()/cell));
+        const qint64 gy = static_cast<qint64>(std::floor(q.y()/cell));
+        for (qint64 dy=-1; dy<=1; ++dy)
+            for (qint64 dx=-1; dx<=1; ++dx) {
+                const qint64 key = ((gx+dx)<<32) ^ ((gy+dy)&0xffffffff);
+                if (buckets.contains(key)) idxs += buckets[key];
+            }
+        return idxs;
+    };
+
+    for (int ei=0; ei<ends.size(); ++ei) {
+        const QPointF q = ends[ei].pos;
+        const QVector<int> cand = nearbyVerts(q);
+        int attach = -1;
+        for (int ci : cand) {
+            const QPointF mean = vSum[ci] / double(std::max(1, vCnt[ci]));
+            if (dist2D(mean, q) <= tol*tol) { attach = ci; break; }
+        }
+        if (attach < 0) {
+            attach = vSum.size();
+            vSum.push_back(q);
+            vCnt.push_back(1);
+        } else {
+            vSum[attach] += q;
+            vCnt[attach] += 1;
+        }
+        ends[ei].vid = attach;
+        buckets[cellKey(q)].push_back(attach);
+    }
+
+    QVector<QPointF> vPos; vPos.reserve(vSum.size());
+    for (int i=0;i<vSum.size();++i) vPos.push_back(vSum[i] / double(std::max(1, vCnt[i])));
+
+    // ------- 2) New lines = welded + axis snapped -------
+    outNew.resize(lines.size());
+    for (int i=0;i<lines.size();++i) {
+        const QPointF P = vPos[ ends[2*i + 0].vid ];
+        const QPointF Q = vPos[ ends[2*i + 1].vid ];
+        QLineF L(P, Q);
+        if (L.length() >= p.minLenPx)
+            dcAxisSnap(L, p.axisSnapDeg);
+        outNew[i] = L;
+    }
+
+    // ------- 3) Add micro-closures between free endpoints -------
+    const double close2 = p.closeTolPx * p.closeTolPx;
+    QVector<QVector<int>> incident(vPos.size());
+    for (int i=0;i<lines.size();++i) {
+        incident[ ends[2*i+0].vid ].push_back(i);
+        incident[ ends[2*i+1].vid ].push_back(i);
+    }
+    QVector<int> freeVerts;
+    for (int vid=0; vid<vPos.size(); ++vid)
+        if (incident[vid].size()==1) freeVerts.push_back(vid);
+
+    for (int a=0; a<freeVerts.size(); ++a) {
+        for (int b=a+1; b<freeVerts.size(); ++b) {
+            const int va = freeVerts[a], vb = freeVerts[b];
+            const QPointF P = vPos[va], Q = vPos[vb];
+            if (dist2D(P,Q) > close2) continue;
+
+            QLineF L(P,Q);
+            if (L.length() < p.minLenPx) continue;
+            dcAxisSnap(L, p.axisSnapDeg);
+
+            // avoid duplicating existing connection
+            bool dup=false;
+            for (int li : incident[va]) {
+                int other = (ends[2*li+0].vid==va)? ends[2*li+1].vid : ends[2*li+0].vid;
+                if (other==vb) { dup=true; break; }
+            }
+            if (!dup) outClosures.push_back(L);
+        }
+    }
+
+    // ------- 4) Parallel stack thinning (gentle, width-aware) -------
+    if (p.stackEnabled) {
+        const double angTolRad = p.stackAngleDeg * M_PI / 180.0;
+        const double sepTol    = std::max(0.0, p.stackSepPx);
+        const double minOv     = std::max(0.0, p.stackMinOverlap);
+
+        const int n = outNew.size();
+        QVector<bool> killed(n,false);
+
+        auto dirAngle = [](const QLineF& L)->double {
+            double a = std::atan2(L.dy(), L.dx());
+            if (a < 0) a += M_PI;           // [0,π)
+            return a;
+        };
+
+        for (int i=0;i<n;++i) {
+            if (killed[i]) continue;
+            QLineF A = outNew[i];
+            if (A.length() < p.minLenPx) continue;
+
+            // reference axis from A
+            const QPointF O( 0.25*(A.x1()+A.x2()), 0.25*(A.y1()+A.y2()) ); // some origin (quarter of sum)
+            const double lenA = std::hypot(A.dx(), A.dy());
+            if (lenA <= 1e-9) continue;
+            const QPointF u( A.dx()/lenA, A.dy()/lenA );     // axis unit
+            const QPointF nrm(-u.y(), u.x());                // perp
+
+            auto projS = [&](const QPointF& P){ return dot2D(QPointF(P.x()-O.x(), P.y()-O.y()), u); };
+            auto projT = [&](const QPointF& P){ return dot2D(QPointF(P.x()-O.x(), P.y()-O.y()), nrm); };
+
+            double sA1 = projS(A.p1()), sA2 = projS(A.p2());
+            if (sA1 > sA2) std::swap(sA1, sA2);
+            const double offA = 0.5*(projT(A.p1()) + projT(A.p2()));
+
+            double sMin = sA1, sMax = sA2;
+            double offSum = offA; int offCnt = 1;
+
+            for (int j=i+1;j<n;++j) {
+                if (killed[j]) continue;
+                QLineF B = outNew[j];
+                if (B.length() < p.minLenPx) continue;
+
+                // angle similarity
+                double dAng = std::fabs(dirAngle(A) - dirAngle(B));
+                dAng = std::min(dAng, M_PI - dAng);
+                if (dAng > angTolRad) continue;
+
+                // separation (signed offset of midpoints)
+                const double offB = 0.5*(projT(B.p1()) + projT(B.p2()));
+                if (std::fabs(offA - offB) > sepTol) continue;
+
+                // overlap along axis
+                double sB1 = projS(B.p1()), sB2 = projS(B.p2());
+                if (sB1 > sB2) std::swap(sB1, sB2);
+                const double ov = std::max(0.0, std::min(sA2, sB2) - std::max(sA1, sB1));
+                if (ov < minOv) continue;
+
+                // accept into group
+                sMin   = std::min(sMin, sB1);
+                sMax   = std::max(sMax, sB2);
+                offSum += offB; ++offCnt;
+                killed[j] = true;
+                outDeleteIdx.push_back(j);
+            }
+
+            const double offC = offSum / double(offCnt);
+            const QPointF P = QPointF(O.x() + u.x()*sMin + nrm.x()*offC,
+                                      O.y() + u.y()*sMin + nrm.y()*offC);
+            const QPointF Q = QPointF(O.x() + u.x()*sMax + nrm.x()*offC,
+                                      O.y() + u.y()*sMax + nrm.y()*offC);
+            outNew[i] = QLineF(P,Q);
+        }
+
+        // Optional: ensure delete indices are unique & sorted (nice for apply)
+        std::sort(outDeleteIdx.begin(), outDeleteIdx.end());
+        outDeleteIdx.erase(std::unique(outDeleteIdx.begin(), outDeleteIdx.end()), outDeleteIdx.end());
+    }
+}
+
+void DrawingCanvas::updateRefinePreview(const RefineParams& p)
+{
+    // 1) Drop ONLY the old overlay (if any). Keep any staged data intact.
+    if (m_refinePreview) {
+        if (m_refinePreview->scene() == m_scene)
+            m_scene->removeItem(m_refinePreview);
+        delete m_refinePreview;
+        m_refinePreview = nullptr;
+    }
+
+    // 2) Collect lines and compute preview state
+    const QList<QGraphicsLineItem*> lines = collectLineItems();
+
+    m_refineSrc = QVector<QGraphicsLineItem*>::fromList(lines);
+    m_refineNew.clear();
+    m_refineClosures.clear();
+    m_refineDeleteIdx.clear();
+
+    computeRefinePreview(lines, p, m_refineNew, m_refineClosures, m_refineDeleteIdx);
+
+    // 3) Build overlay
+    m_refinePreview = new QGraphicsItemGroup();
+    m_refinePreview->setHandlesChildEvents(false);
+    m_refinePreview->setFlag(QGraphicsItem::ItemIsSelectable, false);
+    m_refinePreview->setZValue(1e6);
+    m_scene->addItem(m_refinePreview);
+
+    QPen changedPen(Qt::blue);       changedPen.setCosmetic(true); changedPen.setStyle(Qt::DashLine);
+    QPen addPen    (Qt::darkGreen);  addPen    .setCosmetic(true); addPen    .setStyle(Qt::DashDotLine);
+    QPen delPen    (Qt::red);        delPen    .setCosmetic(true); delPen    .setStyle(Qt::DotLine);
+
+    // Replacement geometry (blue)
+    for (const QLineF& L : m_refineNew) {
+        auto* ghost = new QGraphicsLineItem(L);
+        ghost->setPen(changedPen);
+        ghost->setZValue(1e6+1);
+        m_refinePreview->addToGroup(ghost);
+    }
+    // New closures (green)
+    for (const QLineF& L : m_refineClosures) {
+        auto* ghost = new QGraphicsLineItem(L);
+        ghost->setPen(addPen);
+        ghost->setZValue(1e6+1);
+        m_refinePreview->addToGroup(ghost);
+    }
+    // To-be-deleted originals (red at current positions)
+    for (int idx : m_refineDeleteIdx) {
+        if (idx >= 0 && idx < m_refineSrc.size() && m_refineSrc[idx]) {
+            auto* ghost = new QGraphicsLineItem(m_refineSrc[idx]->line());
+            ghost->setPen(delPen);
+            ghost->setZValue(1e6+1);
+            m_refinePreview->addToGroup(ghost);
+        }
+    }
+
+    viewport()->update();
+}
+
+int DrawingCanvas::applyRefinePreview()
+{
+    if (!m_refinePreview) return 0;
+    int edits = 0;
+
+    const int n = std::min(m_refineSrc.size(), m_refineNew.size());
+    QSet<int> toDelete = QSet<int>(m_refineDeleteIdx.begin(), m_refineDeleteIdx.end());
+
+    // Apply geometry updates to survivors
+    for (int i = 0; i < n; ++i) {
+        if (!m_refineSrc[i]) continue;
+        if (toDelete.contains(i)) continue; // will delete
+        const QLineF cur = m_refineSrc[i]->line();
+        const QLineF nxt = m_refineNew[i];
+        if (cur.p1() != nxt.p1() || cur.p2() != nxt.p2()) {
+            m_refineSrc[i]->setLine(nxt);
+            ++edits;
+        }
+    }
+
+    // Delete thinned duplicates
+    for (int idx : toDelete) {
+        if (idx >= 0 && idx < m_refineSrc.size() && m_refineSrc[idx]) {
+            m_scene->removeItem(m_refineSrc[idx]);
+            delete m_refineSrc[idx];
+            ++edits;
+        }
+    }
+
+    // Add closures
+    for (const QLineF& L : m_refineClosures) {
+        if (L.length() <= 0.0) continue;
+        auto* ln = new QGraphicsLineItem(L);
+        ln->setPen(currentPen());
+        ln->setData(0, m_layer);
+        applyLayerStateToItem(ln, m_layer);
+        ln->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        m_scene->addItem(ln);
+        ++edits;
+    }
+
+    // Clean up preview + staged data
+    cancelRefinePreview();
+
+    scene()->update();
+    viewport()->update();
+    return edits;
+}
+
+void DrawingCanvas::cancelRefinePreview()
+{
+    // Remove overlay if present
+    if (m_refinePreview) {
+        if (m_refinePreview->scene() == m_scene)
+            m_scene->removeItem(m_refinePreview);
+        delete m_refinePreview;
+        m_refinePreview = nullptr;
+    }
+
+    // Clear staged arrays
+    m_refineSrc.clear();
+    m_refineNew.clear();
+    m_refineClosures.clear();
+    m_refineDeleteIdx.clear();
+}
 
 

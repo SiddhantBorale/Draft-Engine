@@ -16,6 +16,14 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+#include <QDialog>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QLabel>
+
 
 // Network
 #include <QNetworkAccessManager>
@@ -362,6 +370,91 @@ void MainWindow::setupMenus()
                   QKeySequence("Ctrl+Shift+V"),
                   this, &MainWindow::runBluePrintAI);
     ai->addAction("Refine Vector (light overlaps)…", QKeySequence("Ctrl+Shift+L"),this, &MainWindow::refineOverlapsLight);
+    // e.g., in constructor after building menus:
+    auto* actRefinePreview = ai->addAction("Refine (Preview)...");
+connect(actRefinePreview, &QAction::triggered, this, [this]{
+    QDialog dlg(this);
+    dlg.setWindowTitle("Refine (Preview)");
+    auto* form = new QFormLayout;
+
+    // Core
+    auto* weld  = new QDoubleSpinBox; weld->setRange(0.1, 50.0); weld->setValue(6.0);  weld->setDecimals(1);
+    auto* close = new QDoubleSpinBox; close->setRange(0.1, 50.0); close->setValue(8.0); close->setDecimals(1);
+    auto* axis  = new QDoubleSpinBox; axis->setRange(0.0, 45.0);  axis->setValue(6.0);  axis->setDecimals(1);
+    auto* minl  = new QDoubleSpinBox; minl->setRange(0.0, 50.0);  minl->setValue(10.0); minl->setDecimals(1);
+
+    form->addRow("Weld tolerance (px):", weld);
+    form->addRow("Close gap (px):",      close);
+    form->addRow("Axis snap (deg):",     axis);
+    form->addRow("Min length (px):",     minl);
+
+    // --- NEW: parallel stack thinning group ---
+    auto* thinLbl = new QLabel("<b>Parallel stack thinning</b>");
+    form->addRow(thinLbl);
+
+    auto* thinEnable = new QCheckBox("Enable stack thinning");
+    thinEnable->setChecked(true);
+    form->addRow(QString(), thinEnable);
+
+    auto* sep   = new QDoubleSpinBox; sep->setRange(0.0, 20.0); sep->setValue(3.0);  sep->setDecimals(1);
+    auto* ang   = new QDoubleSpinBox; ang->setRange(0.0, 15.0); ang->setValue(3.0);  ang->setDecimals(1);
+    auto* ovlap = new QDoubleSpinBox; ovlap->setRange(0.0, 200.0); ovlap->setValue(30.0); ovlap->setDecimals(0);
+
+    form->addRow("Max separation (px):", sep);
+    form->addRow("Max angle Δ (deg):",   ang);
+    form->addRow("Min overlap (px):",    ovlap);
+
+    // Buttons
+    auto* btnPreview = new QPushButton("Preview");
+    auto* btnApply   = new QPushButton("Apply");
+    auto* btnClose   = new QPushButton("Close");
+
+    auto* h = new QHBoxLayout;
+    h->addStretch(1);
+    h->addWidget(btnPreview);
+    h->addWidget(btnApply);
+    h->addWidget(btnClose);
+
+    auto* v = new QVBoxLayout;
+    v->addLayout(form);
+    v->addLayout(h);
+    dlg.setLayout(v);
+
+    auto sendParams = [this, weld, close, axis, minl, thinEnable, sep, ang, ovlap](){
+        DrawingCanvas::RefineParams p;
+        p.weldTolPx   = weld->value();
+        p.closeTolPx  = close->value();
+        p.axisSnapDeg = axis->value();
+        p.minLenPx    = minl->value();
+
+        p.stackEnabled    = thinEnable->isChecked();
+        p.stackSepPx      = sep->value();
+        p.stackAngleDeg   = ang->value();
+        p.stackMinOverlap = ovlap->value();
+
+        m_canvas->updateRefinePreview(p);
+    };
+
+    connect(btnPreview, &QPushButton::clicked, this, sendParams);
+    connect(btnApply,   &QPushButton::clicked, this, [this]{
+        const int edits = m_canvas->applyRefinePreview();
+        statusBar()->showMessage(QString("Refine applied: %1 edits").arg(edits), 3000);
+    });
+    connect(btnClose,   &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    // live preview
+    auto live = [sendParams](auto* w){
+        QObject::connect(w, SIGNAL(valueChanged(double)), w, SLOT(update())); // noop to keep moc happy
+        QObject::connect(w, &QDoubleSpinBox::valueChanged, [sendParams](double){ sendParams(); });
+    };
+    live(weld); live(close); live(axis); live(minl); live(sep); live(ang); live(ovlap);
+    QObject::connect(thinEnable, &QCheckBox::toggled, [sendParams](bool){ sendParams(); });
+
+    sendParams();
+    dlg.exec();
+    m_canvas->cancelRefinePreview(); // ensure overlay removed if user closes without Apply
+});
+
               
 }   
 

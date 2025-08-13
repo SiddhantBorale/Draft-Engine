@@ -62,13 +62,22 @@ public:
     double gapPx            = 1.0;   // close endpoints if within this
     double mergePx          = 1.0;   // treat endpoints as same if within this
     double extendPx         = 1.0;   // extend endpoints to hit a nearby segment
-    double minLenPx         = 20.0;   // delete segments shorter than this
     double collinearOverlapPx = 2.0; // need at least this 1-D overlap to merge
 
     // angles
-    double axisSnapDeg      = 85.0;   // snap to 0/90 only if within this
     double axisSnapMinLen   = 50.0;  // but only if the segment is at least this long
     double extendAngleDeg   = 85.0;  // allow extending only if near 90°±this to the target
+
+    double weldTolPx   = 6.0;  // endpoints within this are welded (kept averaged)
+    double closeTolPx  = 8.0;  // if two free endpoints are within this, add a closure
+    double axisSnapDeg = 6.0;  // snap near-horizontal/vertical
+    double minLenPx    = 10.0; 
+    
+    bool   stackEnabled     = true;  // toggle thinning
+    double stackSepPx       = 3.0;   // max lateral separation to be considered same wall
+    double stackAngleDeg    = 3.0;   // max angle difference
+    double stackMinOverlap  = 30.0;  // min projected overlap to thin (px)
+
 
     // (You can make presets by copying and tweaking these numbers.)
 };
@@ -80,7 +89,11 @@ public:
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
-    int refineOverlapsLight(double tolPx = 1.5, double coverage = 0.95, double axisSnapDeg = 3);
+    int refineOverlapsLight(double tolPx = 1.0, double coverage = 0.95, double axisSnapDeg = 8);
+
+    void updateRefinePreview(const RefineParams& p); // recompute overlay (non-destructive)
+    int  applyRefinePreview();                       // commit overlay to items, returns edits count
+    void cancelRefinePreview(); 
 
     int refineVector();
     int refineVector(const RefineParams& p);
@@ -183,6 +196,26 @@ private:
     bool handleMouseMove   (const QPointF& scenePos);
     bool handleMouseRelease(const QPointF& scenePos);
 
+    static inline double dot2D(const QPointF& a, const QPointF& b) {
+        return a.x()*b.x() + a.y()*b.y();
+    }
+    static inline double dist2D(const QPointF& a, const QPointF& b) {
+        const double dx=a.x()-b.x(), dy=a.y()-b.y(); return dx*dx+dy*dy;
+    }
+    static inline QPointF projectPointOnSegmentLocal(const QPointF& p,
+                                                     const QPointF& a,
+                                                     const QPointF& b,
+                                                     double* tOut=nullptr) {
+        const QPointF v(b.x()-a.x(), b.y()-a.y());
+        const double vv = v.x()*v.x() + v.y()*v.y();
+        if (vv <= 1e-12) { if (tOut) *tOut = 0.0; return a; }
+        const QPointF ap(p.x()-a.x(), p.y()-a.y());
+        double t = dot2D(ap, v) / vv;
+        t = std::max(0.0, std::min(1.0, t));
+        if (tOut) *tOut = t;
+        return QPointF(a.x() + t*v.x(), a.y() + t*v.y());
+    }
+
     // Snap helpers
     static bool almostEqual(const QPointF& a, const QPointF& b, double tol);
     static QPointF snapTol(const QPointF& p, double tol);
@@ -261,4 +294,19 @@ private:
     qreal        m_dimOffset { 20.0 };
     bool         m_dimPending { false }; // if you run a multi-click flow
 
+
+    QGraphicsItemGroup*            m_refinePreview { nullptr };
+    QVector<QGraphicsLineItem*>    m_refineSrc;        // original line items
+    QVector<QLineF>                m_refineNew;        // new geometry for survivors (same size as m_refineSrc)
+    QVector<QLineF>                m_refineClosures;   // small gap closures to add
+    QVector<int>                   m_refineDeleteIdx;  // indices into m_refineSrc to delete  (NEW)
+
+    QList<QGraphicsLineItem*> collectLineItems() const;
+
+    // Compute refined endpoints & closures without touching the scene
+    void computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
+                              const RefineParams& p,
+                              QVector<QLineF>& outNew,
+                              QVector<QLineF>& outClosures,
+                              QVector<int>& outDeleteIdx);
 };
