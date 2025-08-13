@@ -28,6 +28,8 @@ private slots:
     void applyLineBend();
 
     // toolbar/menu actions
+    void promptForProjectUnits();
+    void setScaleInteractive();
     void setDimPrecision(int p);
     void changeFillPattern(int idx); 
     void chooseColor();
@@ -65,6 +67,9 @@ private slots:
 
 
 private:
+
+    QAction* m_actSetScale { nullptr };
+
     // UI builders
     QDoubleSpinBox* m_cornerSpin { nullptr }; // NEW
     QDoubleSpinBox* m_bendSpin   { nullptr }; // NEW

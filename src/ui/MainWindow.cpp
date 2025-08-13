@@ -117,6 +117,18 @@ void MainWindow::setupToolPanel()
     auto* ai = menuBar()->addMenu("&AI");
     ai->addAction("Refine Vector", QKeySequence("Ctrl+Shift+R"), this, &MainWindow::refineVector);
 
+    auto* unitsMenu = menuBar()->addMenu("Units");
+    auto addDisp = [&](const QString& name, DrawingCanvas::Unit u){
+        QAction* a = new QAction(name, this);
+        connect(a, &QAction::triggered, this, [this,u](){ m_canvas->setDisplayUnit(u); });
+        unitsMenu->addAction(a);
+    };
+    addDisp("Display: Millimeter", DrawingCanvas::Unit::Millimeter);
+    addDisp("Display: Centimeter", DrawingCanvas::Unit::Centimeter);
+    addDisp("Display: Meter",      DrawingCanvas::Unit::Meter);
+    addDisp("Display: Inch",       DrawingCanvas::Unit::Inch);
+    addDisp("Display: Foot",       DrawingCanvas::Unit::Foot);
+
 
     // Stroke color
     auto* strokeBtn = new QPushButton("Stroke Color", toolWidget);
@@ -133,6 +145,8 @@ void MainWindow::setupToolPanel()
     auto* hatchLay = new QHBoxLayout(hatchRow);
     hatchLay->setContentsMargins(0,0,0,0);
     hatchLay->addWidget(new QLabel("Hatch:", hatchRow));
+
+    
 
     auto* hatchBox = new QComboBox(hatchRow);
     hatchBox->addItem("None");          // 0
@@ -357,6 +371,11 @@ void MainWindow::setupMenus()
     });
     edit->addAction("Apply Fill to Selection", this, [this]{ m_canvas->applyFillToSelection(); });
 
+    auto* tools = menuBar()->addMenu(tr("&Tools"));
+    m_actSetScale = tools->addAction(tr("Set &Scale…"));
+    m_actSetScale->setShortcut(QKeySequence("Ctrl+Shift+S"));
+    connect(m_actSetScale, &QAction::triggered, this, &MainWindow::setScaleInteractive);
+
     // View (Zoom)
     auto* view = menuBar()->addMenu("&View");
     view->addAction("Zoom In",    QKeySequence::ZoomIn,  this, &MainWindow::zoomIn);
@@ -457,6 +476,12 @@ connect(actRefinePreview, &QAction::triggered, this, [this]{
 
               
 }   
+
+void MainWindow::setScaleInteractive()
+{
+    statusBar()->showMessage(tr("Set Scale: click first point, then second point…"));
+    m_canvas->startSetScaleMode();
+}
 
 void MainWindow::layerItemChanged(QTreeWidgetItem* it, int column)
 {
@@ -643,6 +668,29 @@ void MainWindow::addLayer()
     m_layerTree->setCurrentItem(it);
     m_nextLayerId++;
 }
+
+void MainWindow::promptForProjectUnits()
+{
+    QStringList opts{ "Millimeter", "Centimeter", "Meter", "Inch", "Foot" };
+    bool ok = false;
+    const QString sel = QInputDialog::getItem(this, "Project Units",
+                                              "Choose base units:", opts, 0, false, &ok);
+    if (!ok) return;
+
+    auto parse = [](const QString& s){
+        using U = DrawingCanvas::Unit;
+        if (s=="Centimeter") return U::Centimeter;
+        if (s=="Meter")      return U::Meter;
+        if (s=="Inch")       return U::Inch;
+        if (s=="Foot")       return U::Foot;
+        return U::Millimeter;
+    };
+    auto u = parse(sel);
+    m_canvas->setProjectUnit(u);
+    m_canvas->setDisplayUnit(u);
+    m_canvas->setUnitPrecision((u==DrawingCanvas::Unit::Meter || u==DrawingCanvas::Unit::Foot) ? 3 : 1);
+}
+
 
 
 void MainWindow::removeSelectedLayer()

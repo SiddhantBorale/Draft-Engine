@@ -17,6 +17,10 @@
 #include <QGraphicsPathItem>
 #include <QPainterPath>
 #include "dim/LinearDimItem.h"
+#include <QInputDialog>
+#include <QGraphicsLineItem>
+#include <QString>
+
 
 
 class QUndoStack;
@@ -57,6 +61,35 @@ private:
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
 public:
+
+    //units
+    enum class Unit { Millimeter, Centimeter, Meter, Inch, Foot };
+
+    void setProjectUnit(Unit u);
+    void setDisplayUnit(Unit u);
+    Unit projectUnit() const { return m_projectUnit; }
+    Unit displayUnit() const { return m_displayUnit; }
+
+    // scale: pixels per *project unit*
+    void   setScalePxPerUnit(double pxPerUnit);
+    double pxPerUnit() const { return m_pxPerUnit; }
+
+    // conversions
+    double toProjectUnitsPx(double px) const { return px / m_pxPerUnit; }
+    double toPxFromProjectUnits(double u) const { return u * m_pxPerUnit; }
+    double convertUnits(double val, Unit from, Unit to) const;
+
+    // formatting
+    QString unitSuffix(Unit u) const;
+    QString formatDistancePx(double px, int precision = -1) const;
+    void    setUnitPrecision(int digits);
+    int     unitPrecision() const { return m_unitPrecision; }
+    void    setShowUnitSuffix(bool on) { m_showUnitSuffix = on; }
+    bool    showUnitSuffix() const { return m_showUnitSuffix; }
+
+    // give dimension items a ready-to-use formatter
+    std::function<QString(double)> distanceFormatter() const;
+
     struct RefineParams {
     // distances (pixels)
     double gapPx            = 1.0;   // close endpoints if within this
@@ -85,7 +118,7 @@ public:
     
 
 
-    enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear };
+    enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear, SetScale };
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
@@ -93,7 +126,11 @@ public:
 
     void updateRefinePreview(const RefineParams& p); // recompute overlay (non-destructive)
     int  applyRefinePreview();                       // commit overlay to items, returns edits count
-    void cancelRefinePreview(); 
+    void cancelRefinePreview();
+
+    void setUnits(const QString& u, int precision = 2);
+    void setPxPerUnit(double pxPerUnit);
+    void startSetScaleMode() { setCurrentTool(Tool::SetScale); }
 
     int refineVector();
     int refineVector(const RefineParams& p);
@@ -147,6 +184,8 @@ public:
 
 signals:
     void viewChanged(); // rulers listen
+    void unitsChanged();
+    void scalePicked(const QPointF& p1, const QPointF& p2);
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
@@ -309,4 +348,22 @@ private:
                               QVector<QLineF>& outNew,
                               QVector<QLineF>& outClosures,
                               QVector<int>& outDeleteIdx);
+
+
+    // interactive "Set Scale" picking
+    bool                 m_scalePicking { false };
+    QPointF              m_scaleP1;
+    QGraphicsLineItem*   m_scalePreview { nullptr };
+
+    void applyScaleToExistingDims();
+
+    // ---- Units state ----
+    Unit   m_projectUnit { Unit::Millimeter };
+    Unit   m_displayUnit { Unit::Millimeter };
+    double m_pxPerUnit   { 1.0 };  // pixels per project unit
+    int    m_unitPrecision { 2 };
+    bool   m_showUnitSuffix { true };
+
+    QString m_units = QStringLiteral("mm");      // label shown in the SetScale prompt
+    int     m_unitPrec = 2;
 };

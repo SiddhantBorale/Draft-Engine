@@ -30,35 +30,56 @@ void LinearDimItem::setOffset(qreal o)
     update();
 }
 
+void LinearDimItem::setStyle(const DimStyle& s)
+{
+    if (m_style.pen == s.pen &&
+        m_style.font == s.font &&
+        qFuzzyCompare(m_style.arrowSize, s.arrowSize) &&
+        m_style.precision == s.precision &&
+        m_style.unit == s.unit &&
+        m_style.showUnits == s.showUnits) {
+        return;
+    }
+    prepareGeometryChange();
+    m_style = s;
+    updatePath();
+    update();
+}
+
+void LinearDimItem::setFormatter(std::function<QString(double)> f)
+{
+    m_format = std::move(f);
+    update(); // label may change formatting
+}
+
 void LinearDimItem::updatePath()
 {
     m_path = QPainterPath();
 
     // vector a->b
-    QPointF v = m_b - m_a;
-    qreal len = std::hypot(v.x(), v.y());
+    const QPointF v = m_b - m_a;
+    const qreal   len = std::hypot(v.x(), v.y());
     if (len < 1e-6) {
-        m_bounds = QRectF(m_a, QSizeF(1,1)).normalized();
+        m_bounds = QRectF(m_a, QSizeF(1, 1)).normalized().marginsAdded(QMarginsF(8, 8, 8, 8));
         return;
     }
 
     // unit normal
-    QPointF n(-v.y()/len, v.x()/len);
-    QPointF a2 = m_a + n * m_offset;
-    QPointF b2 = m_b + n * m_offset;
+    const QPointF n(-v.y()/len, v.x()/len);
+    const QPointF a2 = m_a + n * m_offset;
+    const QPointF b2 = m_b + n * m_offset;
 
-    // dim line
+    // dimension line
     m_path.moveTo(a2);
     m_path.lineTo(b2);
 
     // arrows
     const qreal s = m_style.arrowSize;
-    QPointF dir = v / len;
+    const QPointF dir = v / len;
 
     auto addArrow = [&](const QPointF& tip, int sign){
-        QPointF base = tip - dir * s * sign;
-        // arrow width based on normal
-        QPointF wvec = n * (s * 0.4);
+        const QPointF base = tip - dir * s * sign;
+        const QPointF wvec = n * (s * 0.4);
         QPainterPath tri;
         tri.moveTo(tip);
         tri.lineTo(base + wvec);
@@ -70,7 +91,8 @@ void LinearDimItem::updatePath()
     addArrow(a2, -1);
     addArrow(b2, +1);
 
-    m_bounds = m_path.boundingRect().marginsAdded(QMarginsF(4,4,4,4));
+    // conservative bounds: path + text margin
+    m_bounds = m_path.boundingRect().marginsAdded(QMarginsF(24, 24, 24, 24));
 }
 
 QRectF LinearDimItem::boundingRect() const
@@ -78,7 +100,7 @@ QRectF LinearDimItem::boundingRect() const
     return m_bounds;
 }
 
-void LinearDimItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
+void LinearDimItem::paint(QPainter* p, const QStyleOptionGraphicsItem* /*opt*/, QWidget* /*widget*/)
 {
     p->setRenderHint(QPainter::Antialiasing, true);
 
@@ -88,22 +110,35 @@ void LinearDimItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*
     p->drawPath(m_path);
 
     // length text
-    qreal len = QLineF(m_a, m_b).length();
-    QString text = QString::number(len, 'f', m_style.precision);
-    if (m_style.showUnits && !m_style.unit.isEmpty())
-        text += " " + m_style.unit;
+    const qreal pxLen = QLineF(m_a, m_b).length();
+
+    QString text;
+    if (m_format) {
+        // Canvas provided: converts px -> human label with units
+        text = m_format(pxLen);
+    } else {
+        // Fallback: show pixels with optional suffix
+        text = QString::number(pxLen, 'f', m_style.precision);
+        if (m_style.showUnits && !m_style.unit.isEmpty())
+            text += " " + m_style.unit;
+    }
 
     // place text near the midpoint offset along normal
-    QPointF v = m_b - m_a;
-    qreal L = std::hypot(v.x(), v.y());
+    const QPointF v = m_b - m_a;
+    const qreal L = std::hypot(v.x(), v.y());
     if (L < 1e-6) return;
-    QPointF n(-v.y()/L, v.x()/L);
-    QPointF mid = (m_a + m_b) * 0.5 + n * m_offset;
+
+    const QPointF n(-v.y()/L, v.x()/L);
+    const QPointF mid = (m_a + m_b) * 0.5 + n * m_offset;
 
     p->setPen(m_style.pen);
     p->setFont(m_style.font);
 
-    // simple centered label
-    QRectF box(mid - QPointF(100, 10), QSizeF(200, 20));
+    // center the label on 'mid' using font metrics
+    const QFontMetricsF fm(m_style.font);
+    const QRectF tight = fm.boundingRect(QStringLiteral("  %1  ").arg(text)); // small padding
+    const QRectF box(mid - QPointF(tight.width()/2.0, tight.height()/2.0),
+                     QSizeF(tight.width(), tight.height()));
+
     p->drawText(box, Qt::AlignCenter, text);
 }

@@ -7,6 +7,7 @@
 *****************************************************************************/
 
 #include "../../../src/canvas/DrawingCanvas.h"
+#include <QtGui/qtextcursor.h>
 #include <QtCore/qmetatype.h>
 
 #include <QtCore/qtmochelpers.h>
@@ -40,12 +41,22 @@ template <> constexpr inline auto DrawingCanvas::qt_create_metaobjectdata<qt_met
     QtMocHelpers::StringRefStorage qt_stringData {
         "DrawingCanvas",
         "viewChanged",
-        ""
+        "",
+        "unitsChanged",
+        "scalePicked",
+        "p1",
+        "p2"
     };
 
     QtMocHelpers::UintData qt_methods {
         // Signal 'viewChanged'
         QtMocHelpers::SignalData<void()>(1, 2, QMC::AccessPublic, QMetaType::Void),
+        // Signal 'unitsChanged'
+        QtMocHelpers::SignalData<void()>(3, 2, QMC::AccessPublic, QMetaType::Void),
+        // Signal 'scalePicked'
+        QtMocHelpers::SignalData<void(const QPointF &, const QPointF &)>(4, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QPointF, 5 }, { QMetaType::QPointF, 6 },
+        }}),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -70,11 +81,17 @@ void DrawingCanvas::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
     if (_c == QMetaObject::InvokeMetaMethod) {
         switch (_id) {
         case 0: _t->viewChanged(); break;
+        case 1: _t->unitsChanged(); break;
+        case 2: _t->scalePicked((*reinterpret_cast< std::add_pointer_t<QPointF>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<QPointF>>(_a[2]))); break;
         default: ;
         }
     }
     if (_c == QMetaObject::IndexOfMethod) {
         if (QtMocHelpers::indexOfMethod<void (DrawingCanvas::*)()>(_a, &DrawingCanvas::viewChanged, 0))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (DrawingCanvas::*)()>(_a, &DrawingCanvas::unitsChanged, 1))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (DrawingCanvas::*)(const QPointF & , const QPointF & )>(_a, &DrawingCanvas::scalePicked, 2))
             return;
     }
 }
@@ -98,14 +115,14 @@ int DrawingCanvas::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 1)
+        if (_id < 3)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 1;
+        _id -= 3;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 1)
+        if (_id < 3)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 1;
+        _id -= 3;
     }
     return _id;
 }
@@ -114,5 +131,17 @@ int DrawingCanvas::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
 void DrawingCanvas::viewChanged()
 {
     QMetaObject::activate(this, &staticMetaObject, 0, nullptr);
+}
+
+// SIGNAL 1
+void DrawingCanvas::unitsChanged()
+{
+    QMetaObject::activate(this, &staticMetaObject, 1, nullptr);
+}
+
+// SIGNAL 2
+void DrawingCanvas::scalePicked(const QPointF & _t1, const QPointF & _t2)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 2, nullptr, _t1, _t2);
 }
 QT_WARNING_POP

@@ -12,6 +12,7 @@
 #include <QGraphicsRectItem>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPolygonItem>
+#include <QGraphicsPathItem>
 #include <QGraphicsItemGroup>
 #include <QGraphicsScene>
 
@@ -21,6 +22,7 @@
 #include <QFile>
 #include <QSet>
 
+#include <QInputDialog>
 
 #include <QtSvg/QSvgRenderer>
 #include <QtSvg/QSvgGenerator>
@@ -35,8 +37,6 @@
 
 // --- Shim wrappers so legacy free-function calls still work ---
 // ---- Private helper definitions for DrawingCanvas (declared in .h) ----
-
-
 
 namespace {
     constexpr int kCornerRadiusRole = 0xDA15C0; // any unique int
@@ -98,11 +98,9 @@ namespace {
     }
 }
 
-
 // color serialize helpers
 static QString colorToHex(const QColor& c) { return c.name(QColor::HexArgb); }
 static QColor  hexToColor(const QString& s){ QColor c(s); return c.isValid()? c : QColor(Qt::black); }
-
 
 //--------------------------------------------------------------
 // ctor
@@ -114,14 +112,14 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
 {
     setScene(m_scene);
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]{
-    clearHandles();
-    createHandlesForSelected();
+        clearHandles();
+        createHandlesForSelected();
     });
     setRenderHint(QPainter::Antialiasing, true);
     setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setDragMode(QGraphicsView::RubberBandDrag);
-    
+
     m_dimStyle.pen = QPen(Qt::darkGray, 0);
     m_dimStyle.font = QFont("Menlo", 9);
     m_dimStyle.arrowSize = 8.0;
@@ -136,6 +134,88 @@ DrawingCanvas::DrawingCanvas(QWidget* parent)
     // rulers: notify when scrolled
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
     connect(verticalScrollBar(),   &QScrollBar::valueChanged, this, [this]{ emit viewChanged(); });
+    m_scalePreview = nullptr;
+}
+
+// ---------- Units helpers ----------
+static double factorToMM(DrawingCanvas::Unit u)
+{
+    using U = DrawingCanvas::Unit;
+    switch (u) {
+    case U::Millimeter: return 1.0;
+    case U::Centimeter: return 10.0;
+    case U::Meter:      return 1000.0;
+    case U::Inch:       return 25.4;
+    case U::Foot:       return 304.8;
+    }
+    return 1.0;
+}
+
+double DrawingCanvas::convertUnits(double val, Unit from, Unit to) const
+{
+    const double mm = val * factorToMM(from);
+    return mm / factorToMM(to);
+}
+
+QString DrawingCanvas::unitSuffix(Unit u) const
+{
+    switch (u) {
+    case Unit::Millimeter: return "mm";
+    case Unit::Centimeter: return "cm";
+    case Unit::Meter:      return "m";
+    case Unit::Inch:       return "in";
+    case Unit::Foot:       return "ft";
+    }
+    return "u";
+}
+
+void DrawingCanvas::setProjectUnit(Unit u)
+{
+    m_projectUnit = u;
+    emit unitsChanged();
+    if (m_scene) m_scene->update();
+    if (viewport()) viewport()->update();
+}
+
+void DrawingCanvas::setDisplayUnit(Unit u)
+{
+    m_displayUnit = u;
+    emit unitsChanged();
+    if (m_scene) m_scene->update();
+    if (viewport()) viewport()->update();
+}
+
+void DrawingCanvas::setScalePxPerUnit(double pxPerUnit)
+{
+    m_pxPerUnit = std::max(1e-9, pxPerUnit);
+    emit unitsChanged();
+    if (m_scene) m_scene->update();
+    if (viewport()) viewport()->update();
+}
+
+void DrawingCanvas::setUnitPrecision(int digits)
+{
+    m_unitPrecision = std::max(0, digits);
+    emit unitsChanged();
+    if (m_scene) m_scene->update();
+    if (viewport()) viewport()->update();
+}
+
+QString DrawingCanvas::formatDistancePx(double px, int precision) const
+{
+    // convert: px -> project units -> display units
+    const double projVal = toProjectUnitsPx(px);
+    const double dispVal = convertUnits(projVal, m_projectUnit, m_displayUnit);
+    const int prec = (precision >= 0 ? precision : m_unitPrecision);
+    QString s = QString::number(dispVal, 'f', prec);
+    if (m_showUnitSuffix) s += " " + unitSuffix(m_displayUnit);
+    return s;
+}
+
+std::function<QString(double)> DrawingCanvas::distanceFormatter() const
+{
+    // capture this canvas; every repaint will use the latest units/precision
+    return [this](double px) { return this->formatDistancePx(px); };
 }
 
 //--------------------------------------------------------------
@@ -164,6 +244,37 @@ void DrawingCanvas::applyLayerStateToItem(QGraphicsItem* it, int id) {
 void DrawingCanvas::setCurrentLayer(int layer) {
     m_layer = layer;
     ensureLayer(layer);
+}
+
+void DrawingCanvas::setUnits(const QString& u, int precision)
+{
+    m_units = u;
+    m_unitPrec = std::max(0, precision);
+    // keep m_dimStyle if you already have one; otherwise this just affects new dims
+    applyScaleToExistingDims();
+    viewport()->update();
+}
+
+void DrawingCanvas::setPxPerUnit(double pxPerUnit)
+{
+    if (pxPerUnit <= 1e-9) return;
+    m_pxPerUnit = pxPerUnit;
+    applyScaleToExistingDims();
+    viewport()->update();
+}
+
+void DrawingCanvas::applyScaleToExistingDims()
+{
+    // If you keep dim items in scene, push scale + style to them
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* dim = dynamic_cast<LinearDimItem*>(it)) {
+            DimStyle st = dim->style();
+            st.unit = m_units;
+            st.precision = m_unitPrec;
+            dim->setStyle(st);
+            dim->setScale(m_pxPerUnit);
+        }
+    }
 }
 
 //--------------------------------------------------------------
@@ -361,77 +472,117 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
     const QPointF sceneP  = mapToScene(e->pos());
     const QPointF snapped = snap(sceneP);
 
+    if (m_tool == Tool::SetScale) {
+        if (!m_scalePicking) {
+            m_scalePicking = true;
+            m_scaleP1 = snapped;
+
+            // preview line
+            if (!m_scalePreview) {
+                m_scalePreview = m_scene->addLine(QLineF(snapped, snapped), QPen(Qt::darkCyan, 0, Qt::DashLine));
+                m_scalePreview->setZValue(9999);
+            } else {
+                m_scalePreview->setLine(QLineF(snapped, snapped));
+                m_scalePreview->show();
+            }
+            e->accept();
+            return;
+        } else {
+            // second click → compute px length
+            const double pxDist = QLineF(m_scaleP1, snapped).length();
+            if (pxDist > 1e-6) {
+                bool ok = false;
+                const double realLen = QInputDialog::getDouble(
+                    this, tr("Set Scale"),
+                    tr("Real distance between the two points (%1):").arg(m_units),
+                    1000.0, 0.0001, 1e9, m_unitPrec, &ok
+                );
+                if (ok && realLen > 1e-12) {
+                    setPxPerUnit(pxDist / realLen);
+                }
+            }
+            // cleanup
+            if (m_scalePreview) { m_scene->removeItem(m_scalePreview); delete m_scalePreview; m_scalePreview = nullptr; }
+            m_scalePicking = false;
+            // go back to Select
+            setCurrentTool(Tool::Select);
+            e->accept();
+            return;
+        }
+    }
+
     /* ───────────── Linear Dimension (three clicks) ───────────── */
     if (m_tool == Tool::DimLinear) {
-    const QPointF snapP = snapped;
+        const QPointF snapP = snapped;
 
-    // First click → create first anchor (parent to hit item if any)
-    if (!m_dimA) {
-        QGraphicsItem* hit = nullptr;
-        const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
-        for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
+        // First click → create first anchor (parent to hit item if any)
+        if (!m_dimA) {
+            QGraphicsItem* hit = nullptr;
+            const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
+            for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
 
-        m_dimA = new AnchorPoint(hit);
-        if (!hit) {
-            m_dimA->setPos(snapP);
-            m_scene->addItem(m_dimA);           // only add if no parent
+            m_dimA = new AnchorPoint(hit);
+            if (!hit) {
+                m_dimA->setPos(snapP);
+                m_scene->addItem(m_dimA);           // only add if no parent
+            }
+            e->accept();
+            return;
         }
+
+        // Second click → create second anchor
+        if (!m_dimB) {
+            QGraphicsItem* hit = nullptr;
+            const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
+            for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
+
+            m_dimB = new AnchorPoint(hit);
+            if (!hit) {
+                m_dimB->setPos(snapP);
+                m_scene->addItem(m_dimB);           // only add if no parent
+            }
+            e->accept();
+            return;
+        }
+
+        // Third click → compute perpendicular offset and place dimension
+        const QPointF a = m_dimA->scenePos();
+        const QPointF b = m_dimB->scenePos();
+
+        const QPointF d = b - a;
+        const double  len = std::hypot(d.x(), d.y());
+        qreal off = 0.0;
+        if (len > 1e-6) {
+            const QPointF n(-d.y()/len, d.x()/len); // left normal
+            const QPointF mid = (a + b) * 0.5;
+            const QPointF v = snapP - mid;
+            off = v.x()*n.x() + v.y()*n.y();        // signed offset
+        }
+        m_dimOffset = off;
+
+        auto* dim = new LinearDimItem(a, b);
+        dim->setOffset(m_dimOffset);
+        dim->setStyle(m_dimStyle);
+        dim->setData(0, m_layer);
+        dim->setFlags(QGraphicsItem::ItemIsSelectable);
+        m_scene->addItem(dim);                      // add ONCE
+        dim->setFormatter(distanceFormatter());
+
+        // Clean up anchors: remove only if they were free anchors (no parent)
+        if (m_dimA) {
+            if (!m_dimA->parentItem() && m_dimA->scene() == m_scene)
+                m_scene->removeItem(m_dimA);
+            delete m_dimA; m_dimA = nullptr;
+        }
+        if (m_dimB) {
+            if (!m_dimB->parentItem() && m_dimB->scene() == m_scene)
+                m_scene->removeItem(m_dimB);
+            delete m_dimB; m_dimB = nullptr;
+        }
+
         e->accept();
         return;
     }
-
-    // Second click → create second anchor
-    if (!m_dimB) {
-        QGraphicsItem* hit = nullptr;
-        const QRectF pick(snapP - QPointF(3,3), QSizeF(6,6));
-        for (QGraphicsItem* it : m_scene->items(pick)) { hit = it; break; }
-
-        m_dimB = new AnchorPoint(hit);
-        if (!hit) {
-            m_dimB->setPos(snapP);
-            m_scene->addItem(m_dimB);           // only add if no parent
-        }
-        e->accept();
-        return;
-    }
-
-    // Third click → compute perpendicular offset and place dimension
-    const QPointF a = m_dimA->scenePos();
-    const QPointF b = m_dimB->scenePos();
-
-    const QPointF d = b - a;
-    const double  len = std::hypot(d.x(), d.y());
-    qreal off = 0.0;
-    if (len > 1e-6) {
-        const QPointF n(-d.y()/len, d.x()/len); // left normal
-        const QPointF mid = (a + b) * 0.5;
-        const QPointF v = snapP - mid;
-        off = v.x()*n.x() + v.y()*n.y();        // signed offset
-    }
-    m_dimOffset = off;
-
-    auto* dim = new LinearDimItem(a, b);
-    dim->setOffset(m_dimOffset);
-    dim->setStyle(m_dimStyle);
-    dim->setData(0, m_layer);
-    dim->setFlags(QGraphicsItem::ItemIsSelectable);
-    m_scene->addItem(dim);                      // add ONCE
-
-    // Clean up anchors: remove only if they were free anchors (no parent)
-    if (m_dimA) {
-        if (!m_dimA->parentItem() && m_dimA->scene() == m_scene)
-            m_scene->removeItem(m_dimA);
-        delete m_dimA; m_dimA = nullptr;
-    }
-    if (m_dimB) {
-        if (!m_dimB->parentItem() && m_dimB->scene() == m_scene)
-            m_scene->removeItem(m_dimB);
-        delete m_dimB; m_dimB = nullptr;
-    }
-
-    e->accept();
-    return;
-}
 
     /* ───────────── Select tool (handles & move tracking) ───────────── */
     if (m_tool == Tool::Select) {
@@ -538,8 +689,6 @@ void DrawingCanvas::mousePressEvent(QMouseEvent* e)
     }
 }
 
-
-
 void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 {
     const QPointF sceneP = mapToScene(e->pos());
@@ -547,6 +696,17 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
 
     // handles drag
     if (handleMouseMove(sceneP)) { layoutHandles(); return; }
+
+    if (m_tool == Tool::SetScale && m_scalePicking) {
+        const QPointF sceneP = mapToScene(e->pos());
+        const QPointF s      = snap(sceneP);
+
+        if (m_scalePreview)
+            m_scalePreview->setLine(QLineF(m_scaleP1, s));
+
+        e->accept();
+        return;
+    }
 
     if (m_tool == Tool::Select) {
         QGraphicsView::mouseMoveEvent(e);
@@ -589,6 +749,8 @@ void DrawingCanvas::mouseMoveEvent(QMouseEvent* e)
     }
     default: break;
     }
+
+    QGraphicsView::mouseMoveEvent(e);
 }
 
 void DrawingCanvas::mouseReleaseEvent(QMouseEvent* e)
@@ -790,6 +952,7 @@ QJsonDocument DrawingCanvas::saveToJson() const
     }
 
     QJsonObject root{{"items", arr}};
+
     return QJsonDocument(root);
 }
 
@@ -971,9 +1134,6 @@ void DrawingCanvas::clearHandles()
     m_target = nullptr;
 }
 
-
-
-
 void DrawingCanvas::createHandlesForSelected()
 {
     clearHandles();
@@ -1030,8 +1190,6 @@ void DrawingCanvas::createHandlesForSelected()
     layoutHandles();
 }
 
-
-
 void DrawingCanvas::layoutHandles()
 {
     if (!m_target) return;
@@ -1053,9 +1211,7 @@ void DrawingCanvas::layoutHandles()
 
     // convenience for radius-handle positions (a bit inside from each corner)
     auto radPos = [&](Handle::Type t){
-        // Work in scene coordinates using a small inset from the corner,
-        // or if it's RoundedRectItem, place on the arc's 45deg point.
-        const qreal inset = qMin(br.width(), br.height()) * 0.12; // visual distance
+        const qreal inset = qMin(br.width(), br.height()) * 0.12;
         if (auto* rr = qgraphicsitem_cast<RoundedRectItem*>(m_target)) {
             const qreal rx = rr->rx();
             const qreal ry = rr->ry();
@@ -1102,10 +1258,6 @@ void DrawingCanvas::layoutHandles()
     }
 }
 
-
-
-
-
 static QPen previewPen(const QPen& base)
 {
     QPen p = base;
@@ -1114,8 +1266,6 @@ static QPen previewPen(const QPen& base)
     p.setStyle(Qt::DashLine);
     return p;
 }
-
-
 
 bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton btn)
 {
@@ -1152,10 +1302,6 @@ bool DrawingCanvas::handleMousePress(const QPointF& scenePos, Qt::MouseButton bt
     return false;
 }
 
-
-
-
-
 bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
 {
     if (!m_activeHandle || !m_target) return false;
@@ -1179,11 +1325,9 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
 
     // --- Corner radius editing (NEW) ---
     auto applyRadiusDrag = [&](Handle::Type cornerType){
-        // Ensure we are operating on a RoundedRectItem.
         RoundedRectItem* rr = qgraphicsitem_cast<RoundedRectItem*>(m_target);
         if (!rr) {
             if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(m_target)) {
-                // upgrade rect -> rounded rect, preserving style and transforms
                 QRectF r = rc->rect();
                 auto* newItem = new RoundedRectItem(r, 0, 0);
                 newItem->setPen(rc->pen());
@@ -1199,17 +1343,15 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
                 m_scene->removeItem(rc);
                 delete rc;
                 m_target = rr = newItem;
-                // reset start rect reference
                 m_targetStartRect = rr->rect();
             } else {
-                return; // not a rect-like item
+                return;
             }
         }
 
         const QRectF r0 = m_targetStartRect.normalized();
-        // choose which corner we’re dragging
         QPointF corner;
-        int sx = 1, sy = 1; // signs to measure dx,dy
+        int sx = 1, sy = 1;
         switch (cornerType) {
             case Handle::RAD_TL: corner = r0.topLeft();     sx = +1; sy = +1; break;
             case Handle::RAD_TR: corner = r0.topRight();    sx = -1; sy = +1; break;
@@ -1218,32 +1360,27 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
             default: return;
         }
 
-        // Drag vector from corner
-        QPointF localCorner = corner; // already in local coords
+        QPointF localCorner = corner;
         QPointF v = localNow - localCorner;
 
         qreal rx = qMax<qreal>(0.0, sx * v.x());
         qreal ry = qMax<qreal>(0.0, sy * v.y());
-        // Keep arcs “round-ish”: use the smaller of rx,ry for both (or keep independent if you want)
         qreal rad = qMin(rx, ry);
 
-        // Clamp to half width/height
         rad = qMin(rad, r0.width()*0.5);
         rad = qMin(rad, r0.height()*0.5);
 
-        rr->setRect(r0);           // keep rect
-        rr->setRadius(rad, rad);   // set radius
+        rr->setRect(r0);
+        rr->setRadius(rad, rad);
         layoutHandles();
     };
 
-    // Dispatch for radius handles
     if (type == Handle::RAD_TL || type == Handle::RAD_TR ||
         type == Handle::RAD_BR || type == Handle::RAD_BL) {
         applyRadiusDrag(type);
         return true;
     }
 
-    // --- Resize rect/ellipse/line (existing behavior) ---
     if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(m_target)) {
         QRectF r = m_targetStartRect;
         switch (type) {
@@ -1276,7 +1413,6 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
         }
         r = r.normalized();
         rr->setRect(r);
-        // Keep radius clamped to the new size
         rr->setRadius(rr->rx(), rr->ry());
         layoutHandles();
         return true;
@@ -1304,7 +1440,6 @@ bool DrawingCanvas::handleMouseMove(const QPointF& scenePos)
         case Handle::TL: L.setP1(L.p1()+delta); break; // reuse TL for P1
         case Handle::BR: L.setP2(L.p2()+delta); break; // reuse BR for P2
         case Handle::BEND: {
-            // (your existing bend-preview logic here if any)
             break;
         }
         default: break;
@@ -1323,7 +1458,6 @@ bool DrawingCanvas::handleMouseRelease(const QPointF& scenePos)
     m_activeHandle.reset();
     return true;
 }
-
 
 //--------------------------------------------------------------
 // Layers API
@@ -1365,26 +1499,19 @@ void DrawingCanvas::moveItemsToLayer(int fromLayer, int toLayer) {
 // ===================== Rounded corners / Fillet =====================
 static QPainterPath makeRoundedPolygonPath(const QPolygonF& poly, double r)
 {
-    // Clamp + trivial
     if (poly.size() < 3 || r <= 0.0) {
         QPainterPath p; p.addPolygon(poly); p.closeSubpath(); return p;
     }
 
     const bool closed = (poly.first() == poly.last());
-    // Build a working list of points (closed for math)
     QVector<QPointF> pts = poly.toVector();
-    if (!closed) pts.push_back(poly.first()); // treat open as closed ring for turns
+    if (!closed) pts.push_back(poly.first());
 
     QPainterPath path;
     auto N = pts.size();
     auto prevIdx = [&](int i){ return (i-1+N) % N; };
     auto nextIdx = [&](int i){ return (i+1) % N; };
 
-    // Start from first corner; we’ll build with lineTo + quadTo(pivot, exit)
-    // Use first corner inset as initial moveTo
-    auto cornerPoint = [&](int i){ return pts[i]; };
-
-    // Helper: inset point on edge (A->B) by distance d from corner at A
     auto inset = [](const QPointF& A, const QPointF& B, double d)->QPointF {
         QLineF L(A,B);
         if (L.length() < 1e-9) return A;
@@ -1392,7 +1519,6 @@ static QPainterPath makeRoundedPolygonPath(const QPolygonF& poly, double r)
         return L.p2();
     };
 
-    // Compute per-edge inset distances so we don’t overshoot short edges
     QVector<double> maxInset(N, r);
     for (int i = 0; i < N; ++i) {
         const QPointF P = pts[prevIdx(i)];
@@ -1404,26 +1530,23 @@ static QPainterPath makeRoundedPolygonPath(const QPolygonF& poly, double r)
         maxInset[i] = std::min(r, lim);
     }
 
-    // First corner moveTo:
     {
         const int i = 0;
-        QPointF C = cornerPoint(i);
-        QPointF P = cornerPoint(prevIdx(i));
-        QPointF enter = inset(C, P, maxInset[i]); // from C towards P
-        // start at enter point of first corner (close ring will connect)
+        QPointF C = pts[i];
+        QPointF P = pts[prevIdx(i)];
+        QPointF enter = inset(C, P, maxInset[i]);
         path.moveTo(enter);
     }
 
-    // For each corner, create: lineTo(enter), quadTo(corner, exit)
     for (int i = 0; i < N; ++i) {
-        const QPointF P = cornerPoint(prevIdx(i));
-        const QPointF C = cornerPoint(i);
-        const QPointF Nn= cornerPoint(nextIdx(i));
+        const QPointF P = pts[prevIdx(i)];
+        const QPointF C = pts[i];
+        const QPointF Nn= pts[nextIdx(i)];
 
         const double d = maxInset[i];
 
-        QPointF enter = inset(C, P, d); // along CP
-        QPointF exit  = inset(C, Nn, d); // along CN
+        QPointF enter = inset(C, P, d);
+        QPointF exit  = inset(C, Nn, d);
 
         path.lineTo(enter);
         path.quadTo(C, exit);
@@ -1441,11 +1564,9 @@ bool DrawingCanvas::roundSelectedShape(double radius)
 
     QGraphicsItem* it = sel.first();
 
-    // RECT: replace with rounded rect path
     if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(it)) {
         const QRectF r = rc->rect();
         QPainterPath path;
-        // clamp radius to rect size
         const qreal rad = std::min<qreal>(radius, std::min(r.width(), r.height())/2.0);
         path.addRoundedRect(r, rad, rad);
 
@@ -1465,7 +1586,6 @@ bool DrawingCanvas::roundSelectedShape(double radius)
         return true;
     }
 
-    // POLYGON: build rounded polygon painter path
     if (auto* pg = qgraphicsitem_cast<QGraphicsPolygonItem*>(it)) {
         const QPolygonF poly = pg->polygon();
         QPainterPath path = makeRoundedPolygonPath(poly, radius);
@@ -1486,14 +1606,12 @@ bool DrawingCanvas::roundSelectedShape(double radius)
         return true;
     }
 
-    // Lines/Ellipses/Paths not handled here
     return false;
 }
 
 // ======================= Bend line into arc =========================
 bool DrawingCanvas::bendSelectedLine(double sagitta)
 {
-    // Sagitta can be positive/negative (which side of the line to bulge)
     const auto sel = m_scene->selectedItems();
     if (sel.size() != 1) return false;
 
@@ -1506,16 +1624,12 @@ bool DrawingCanvas::bendSelectedLine(double sagitta)
     const QPointF A = L.p1();
     const QPointF B = L.p2();
 
-    // Midpoint
     const QPointF M = (A + B) * 0.5;
 
-    // Unit normal (left-hand normal)
     QLineF dir(A, B);
     dir.setLength(1.0);
-    // normal = rotate dir by +90deg
     QPointF n(-dir.dy(), dir.dx());
 
-    // Control point = midpoint offset by sagitta along normal
     const QPointF C = M + n * sagitta;
 
     QPainterPath path;
@@ -1541,38 +1655,23 @@ bool DrawingCanvas::bendSelectedLine(double sagitta)
 
 void DrawingCanvas::setSelectedCornerRadius(double r)
 {
-    // Normalize negative inputs
     if (r < 0) r = 0;
 
     auto sel = m_scene->selectedItems();
     if (sel.isEmpty()) return;
 
     for (QGraphicsItem* it : sel) {
-        // Get or convert to a path item
         QGraphicsPathItem* pathIt = ensureRoundedPathItem(m_scene, it);
         if (!pathIt) continue;
 
-        // Determine rect to round:
-        // If it used to be a rect we kept that rect in the path; otherwise derive from boundingRect.
-        QRectF rLocal;
-        // Try to recover a “base rect” from existing path if it’s a simple (rounded) rect
-        // Fallback to local bounding rect
-        rLocal = pathIt->path().boundingRect();
-
-        // Build new path with desired radius
+        QRectF rLocal = pathIt->path().boundingRect();
         QPainterPath newPath = makeRoundRectPath(rLocal, r);
 
-        // Apply pen/brush unchanged; update path only
         pathIt->setPath(newPath);
-
-        // Persist radius on the item so handles (or re-edits) can read/update it again
         pathIt->setData(kCornerRadiusRole, r);
     }
 
-    // Re-create & place handles after geometry change so the radius knobs/handles stay in the right spot
     refreshHandles();
-
-    // Repaint rulers if you have them
     emit viewChanged();
 }
 
@@ -1584,11 +1683,9 @@ void DrawingCanvas::refreshHandles()
     viewport()->update();
 }
 
-
 #include <QtMath>
 
 static double angleDeg(const QLineF& L) {
-    // range [0..180)
     double a = std::fmod(180.0 - L.angle(), 180.0);
     if (a < 0) a += 180.0;
     return a;
@@ -1603,9 +1700,7 @@ static QPointF average(const QVector<QPointF>& pts) {
     return QPointF(sx/pts.size(), sy/pts.size());
 }
 
-
 // ---- helpers (place near your other file-scope helpers) ----------------
-
 QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
                                              const QPointF& a,
                                              const QPointF& b,
@@ -1625,7 +1720,8 @@ QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
 
     return QPointF(a.x() + t*vx, a.y() + t*vy);
 }
-// Local helpers for geometry – do NOT use the class' private functions here.
+
+// Local helpers for geometry (names distinct from class-private ones).
 namespace {
     inline double sqr(double v) { return v * v; }
 
@@ -1635,163 +1731,151 @@ namespace {
         return dx*dx + dy*dy;
     }
 
-    inline double segLen2(const QLineF& L) {
-        return dist2(L.p1(), L.p2());
-    }
+    // Provide the names your preview code uses:
+    inline double dist2D(const QPointF& a, const QPointF& b) { return dist2(a,b); }
+    inline double dot2D (const QPointF& a, const QPointF& b) { return a.x()*b.x() + a.y()*b.y(); }
+
+    inline double segLen2(const QLineF& L) { return dist2(L.p1(), L.p2()); }
     inline double length2(const QLineF& L){ return dist2(L.p1(), L.p2()); }
 
-// signed angle difference in degrees in [0,90]
-inline double angleDiffDeg(const QLineF& A, const QLineF& B){
-    const double a1 = std::atan2(A.dy(), A.dx());
-    const double a2 = std::atan2(B.dy(), B.dx());
-    double d = std::fabs(a1 - a2);
-    d = std::min(d, M_PI - d);
-    return d * 180.0 / M_PI;
-}
-
-struct OverlapMerge {
-    QLineF merged;
-    bool   ok = false;
-};
-
-// Decide if A and B are near duplicates (parallel & overlapping) and produce an averaged line.
-// tolPx      : max perpendicular distance between the two lines
-// coverFrac  : required overlap as fraction of the shorter projected length
-// axisSnapDeg: max angle difference allowed (deg)
-inline OverlapMerge overlappedMostly(const QLineF& A, const QLineF& B,
-                                     double tolPx, double coverFrac, double axisSnapDeg)
-{
-    OverlapMerge out;
-
-    // 1) roughly parallel?
-    if (angleDiffDeg(A, B) > axisSnapDeg) return out;
-
-    // Use dominant orientation
-    const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
-
-    // 2) perpendicular separation (average constant coord)
-    auto avgY = [](const QLineF& L){ return 0.5*(L.y1()+L.y2()); };
-    auto avgX = [](const QLineF& L){ return 0.5*(L.x1()+L.x2()); };
-
-    if (horiz) {
-        const double yA = avgY(A), yB = avgY(B);
-        if (std::fabs(yA - yB) > tolPx) return out;
-
-        // Project to X and test overlap
-        const double ax1 = std::min(A.x1(), A.x2());
-        const double ax2 = std::max(A.x1(), A.x2());
-        const double bx1 = std::min(B.x1(), B.x2());
-        const double bx2 = std::max(B.x1(), B.x2());
-
-        const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
-        const double shortLen = std::min(ax2-ax1, bx2-bx1);
-        if (shortLen <= 1e-6) return out;
-        if (overlap < coverFrac * shortLen) return out;
-
-        const double y = 0.5*(yA + yB);
-        const double x1 = std::min(ax1, bx1);
-        const double x2 = std::max(ax2, bx2);
-        out.merged = QLineF(QPointF(x1, y), QPointF(x2, y));
-        out.ok = true;
-        return out;
-    } else {
-        const double xA = avgX(A), xB = avgX(B);
-        if (std::fabs(xA - xB) > tolPx) return out;
-
-        // Project to Y and test overlap
-        const double ay1 = std::min(A.y1(), A.y2());
-        const double ay2 = std::max(A.y1(), A.y2());
-        const double by1 = std::min(B.y1(), B.y2());
-        const double by2 = std::max(B.y1(), B.y2());
-
-        const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
-        const double shortLen = std::min(ay2-ay1, by2-by1);
-        if (shortLen <= 1e-6) return out;
-        if (overlap < coverFrac * shortLen) return out;
-
-        const double x = 0.5*(xA + xB);
-        const double y1 = std::min(ay1, by1);
-        const double y2 = std::max(ay2, by2);
-        out.merged = QLineF(QPointF(x, y1), QPointF(x, y2));
-        out.ok = true;
-        return out;
+    // signed angle difference in degrees in [0,90]
+    inline double angleDiffDeg(const QLineF& A, const QLineF& B){
+        const double a1 = std::atan2(A.dy(), A.dx());
+        const double a2 = std::atan2(B.dy(), B.dx());
+        double d = std::fabs(a1 - a2);
+        d = std::min(d, M_PI - d);
+        return d * 180.0 / M_PI;
     }
-}
-static bool computeMerged(const QLineF& A, const QLineF& B,
-                          double tolPx, double coverFrac, double axisSnapDeg,
-                          QLineF& out)
-{
-    if (angleDiffDeg(A, B) > axisSnapDeg) return false;
 
-    const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
+    struct OverlapMerge {
+        QLineF merged;
+        bool   ok = false;
+    };
 
-    if (horiz) {
-        const double yA = 0.5*(A.y1()+A.y2());
-        const double yB = 0.5*(B.y1()+B.y2());
-        if (std::fabs(yA - yB) > tolPx) return false;
+    inline OverlapMerge overlappedMostly(const QLineF& A, const QLineF& B,
+                                         double tolPx, double coverFrac, double axisSnapDeg)
+    {
+        OverlapMerge out;
+        if (angleDiffDeg(A, B) > axisSnapDeg) return out;
 
-        const double ax1 = std::min(A.x1(), A.x2());
-        const double ax2 = std::max(A.x1(), A.x2());
-        const double bx1 = std::min(B.x1(), B.x2());
-        const double bx2 = std::max(B.x1(), B.x2());
+        const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
 
-        const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
-        const double shortLen = std::min(ax2 - ax1, bx2 - bx1);
-        if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+        auto avgY = [](const QLineF& L){ return 0.5*(L.y1()+L.y2()); };
+        auto avgX = [](const QLineF& L){ return 0.5*(L.x1()+L.x2()); };
 
-        const double y = 0.5*(yA + yB);
-        out = QLineF(QPointF(std::min(ax1, bx1), y), QPointF(std::max(ax2, bx2), y));
-        return true;
-    } else {
-        const double xA = 0.5*(A.x1()+A.x2());
-        const double xB = 0.5*(B.x1()+B.x2());
-        if (std::fabs(xA - xB) > tolPx) return false;
+        if (horiz) {
+            const double yA = avgY(A), yB = avgY(B);
+            if (std::fabs(yA - yB) > tolPx) return out;
 
-        const double ay1 = std::min(A.y1(), A.y2());
-        const double ay2 = std::max(A.y1(), A.y2());
-        const double by1 = std::min(B.y1(), B.y2());
-        const double by2 = std::max(B.y1(), B.y2());
+            const double ax1 = std::min(A.x1(), A.x2());
+            const double ax2 = std::max(A.x1(), A.x2());
+            const double bx1 = std::min(B.x1(), B.x2());
+            const double bx2 = std::max(B.x1(), B.x2());
 
-        const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
-        const double shortLen = std::min(ay2 - ay1, by2 - by1);
-        if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+            const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
+            const double shortLen = std::min(ax2-ax1, bx2-bx1);
+            if (shortLen <= 1e-6) return out;
+            if (overlap < coverFrac * shortLen) return out;
 
-        const double x = 0.5*(xA + xB);
-        out = QLineF(QPointF(x, std::min(ay1, by1)), QPointF(x, std::max(ay2, by2)));
-        return true;
+            const double y = 0.5*(yA + yB);
+            const double x1 = std::min(ax1, bx1);
+            const double x2 = std::max(ax2, bx2);
+            out.merged = QLineF(QPointF(x1, y), QPointF(x2, y));
+            out.ok = true;
+            return out;
+        } else {
+            const double xA = avgX(A), xB = avgX(B);
+            if (std::fabs(xA - xB) > tolPx) return out;
+
+            const double ay1 = std::min(A.y1(), A.y2());
+            const double ay2 = std::max(A.y1(), A.y2());
+            const double by1 = std::min(B.y1(), B.y2());
+            const double by2 = std::max(B.y1(), B.y2());
+
+            const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
+            const double shortLen = std::min(ay2-ay1, by2-by1);
+            if (shortLen <= 1e-6) return out;
+            if (overlap < coverFrac * shortLen) return out;
+
+            const double x = 0.5*(xA + xB);
+            const double y1 = std::min(ay1, by1);
+            const double y2 = std::max(ay2, by2);
+            out.merged = QLineF(QPointF(x, y1), QPointF(x, y2));
+            out.ok = true;
+            return out;
+        }
     }
-}
 
-}
+    static bool computeMerged(const QLineF& A, const QLineF& B,
+                              double tolPx, double coverFrac, double axisSnapDeg,
+                              QLineF& out)
+    {
+        if (angleDiffDeg(A, B) > axisSnapDeg) return false;
 
+        const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
 
-static double angleBetweenDeg(const QLineF& A, const QLineF& B){
-    // acute angle between directions, in degrees
-    double a1 = std::atan2(A.dy(), A.dx());
-    double a2 = std::atan2(B.dy(), B.dx());
-    double d = std::fabs(a1 - a2);
-    if (d > M_PI) d = 2*M_PI - d;
-    return d * 180.0 / M_PI;
-}
-static bool intervalsOverlap1D(double a1, double a2, double b1, double b2, double tol){
-    if (a1 > a2) std::swap(a1, a2);
-    if (b1 > b2) std::swap(b1, b2);
-    return !(a2 < b1 - tol || b2 < a1 - tol);
-}
-static bool nearlyCollinear(const QLineF& A, const QLineF& B, double degTol){
-    return angleBetweenDeg(A, B) <= degTol;
-}
-static bool nearLineDuplicate(const QLineF& A, const QLineF& B, double tolPx){
-    // same (or reversed) line within tol, used to clean duplicates
-    auto close = [&](const QPointF& u, const QPointF& v){ return dist2(u,v) <= sqr(tolPx); };
-    return (close(A.p1(), B.p1()) && close(A.p2(), B.p2())) ||
-           (close(A.p1(), B.p2()) && close(A.p2(), B.p1()));
+        if (horiz) {
+            const double yA = 0.5*(A.y1()+A.y2());
+            const double yB = 0.5*(B.y1()+B.y2());
+            if (std::fabs(yA - yB) > tolPx) return false;
+
+            const double ax1 = std::min(A.x1(), A.x2());
+            const double ax2 = std::max(A.x1(), A.x2());
+            const double bx1 = std::min(B.x1(), B.x2());
+            const double bx2 = std::max(B.x1(), B.x2());
+
+            const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
+            const double shortLen = std::min(ax2 - ax1, bx2 - bx1);
+            if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+
+            const double y = 0.5*(yA + yB);
+            out = QLineF(QPointF(std::min(ax1, bx1), y), QPointF(std::max(ax2, bx2), y));
+            return true;
+        } else {
+            const double xA = 0.5*(A.x1()+A.x2());
+            const double xB = 0.5*(B.x1()+B.x2());
+            if (std::fabs(xA - xB) > tolPx) return false;
+
+            const double ay1 = std::min(A.y1(), A.y2());
+            const double ay2 = std::max(A.y1(), A.y2());
+            const double by1 = std::min(B.y1(), B.y2());
+            const double by2 = std::max(B.y1(), B.y2());
+
+            const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
+            const double shortLen = std::min(ay2 - ay1, by2 - by1);
+            if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+
+            const double x = 0.5*(xA + xB);
+            out = QLineF(QPointF(x, std::min(ay1, by1)), QPointF(x, std::max(ay2, by2)));
+            return true;
+        }
+    }
+
+    static double angleBetweenDeg(const QLineF& A, const QLineF& B){
+        double a1 = std::atan2(A.dy(), A.dx());
+        double a2 = std::atan2(B.dy(), B.dx());
+        double d = std::fabs(a1 - a2);
+        if (d > M_PI) d = 2*M_PI - d;
+        return d * 180.0 / M_PI;
+    }
+    static bool intervalsOverlap1D(double a1, double a2, double b1, double b2, double tol){
+        if (a1 > a2) std::swap(a1, a2);
+        if (b1 > b2) std::swap(b1, b2);
+        return !(a2 < b1 - tol || b2 < a1 - tol);
+    }
+    static bool nearlyCollinear(const QLineF& A, const QLineF& B, double degTol){
+        return angleBetweenDeg(A, B) <= degTol;
+    }
+    static bool nearLineDuplicate(const QLineF& A, const QLineF& B, double tolPx){
+        auto close = [&](const QPointF& u, const QPointF& v){ return dist2(u,v) <= sqr(tolPx); };
+        return (close(A.p1(), B.p1()) && close(A.p2(), B.p2())) ||
+               (close(A.p1(), B.p2()) && close(A.p2(), B.p1()));
+    }
 }
 
 static int removeDuplicateSegments(QGraphicsScene* scene, double tolPx)
 {
-    auto items = scene->items(); // Z-order doesn’t matter for us
-    // Collect all lines with their pointers for safe deletion later
+    auto items = scene->items();
     struct LRef { QGraphicsLineItem* it; QLineF L; };
     QVector<LRef> lines; lines.reserve(items.size());
     for (QGraphicsItem* it : items) {
@@ -1808,7 +1892,6 @@ static int removeDuplicateSegments(QGraphicsScene* scene, double tolPx)
         for (int j = i + 1; j < lines.size(); ++j) {
             if (dead[j]) continue;
             if (nearLineDuplicate(lines[i].L, lines[j].L, tolPx)) {
-                // Prefer keeping the thicker/visible one; simple rule: keep i, drop j
                 scene->removeItem(lines[j].it);
                 delete lines[j].it;
                 dead[j] = true;
@@ -1820,9 +1903,8 @@ static int removeDuplicateSegments(QGraphicsScene* scene, double tolPx)
 }
 
 int DrawingCanvas::refineVector() {
-    return refineVector(RefineParams{}); // defaults
+    return refineVector(RefineParams{});
 }
-
 
 // ---- main pass ----------------------------------------------------------
 int DrawingCanvas::refineVector(const RefineParams& p)
@@ -1853,12 +1935,10 @@ int DrawingCanvas::refineVector(const RefineParams& p)
         const double dev90 = std::fabs(ang - 90.0);
         if (std::min(dev0, dev90) <= p.axisSnapDeg) {
             if (dev90 < dev0) {
-                // vertical: lock x to mid x
                 const double x = 0.5 * (L.x1() + L.x2());
                 L.setP1(QPointF(x, L.y1()));
                 L.setP2(QPointF(x, L.y2()));
             } else {
-                // horizontal: lock y to mid y
                 const double y = 0.5 * (L.y1() + L.y2());
                 L.setP1(QPointF(L.x1(), y));
                 L.setP2(QPointF(L.x2(), y));
@@ -1878,7 +1958,6 @@ int DrawingCanvas::refineVector(const RefineParams& p)
     lines.erase(std::remove(lines.begin(), lines.end(), nullptr), lines.end());
     if (lines.isEmpty()) return fixes;
 
-    // Helper to prefer moving the shorter segment
     auto segLength = [](const QLineF& L){ return std::sqrt(segLen2(L)); };
 
     // 4) close small endpoint gaps (bias: move the shorter one)
@@ -1902,7 +1981,6 @@ int DrawingCanvas::refineVector(const RefineParams& p)
             if (d2 < best2) { best2 = d2; best = j; }
         }
         if (best >= 0) {
-            // choose which endpoint to move: move endpoint of the **shorter segment** to the longer one
             QGraphicsLineItem* A = ends[i].ln;
             QGraphicsLineItem* B = ends[best].ln;
             const double lenA = segLength(A->line());
@@ -1917,19 +1995,17 @@ int DrawingCanvas::refineVector(const RefineParams& p)
     }
 
     // 5) merge collinear segments that *share an endpoint* and overlap on 1D axis
-    const double dirTolDeg = p.axisSnapDeg; // keep same small tolerance
+    const double dirTolDeg = p.axisSnapDeg;
     for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
         auto* A = lines[i]; auto* B = lines[j];
         if (!A || !B) continue;
         QLineF La = A->line(), Lb = B->line();
 
-        // Must share an endpoint
         bool share =
             dist2(La.p1(), Lb.p1()) <= merge2 || dist2(La.p1(), Lb.p2()) <= merge2 ||
             dist2(La.p2(), Lb.p1()) <= merge2 || dist2(La.p2(), Lb.p2()) <= merge2;
         if (!share || !nearlyCollinear(La, Lb, dirTolDeg)) continue;
 
-        // Check 1D overlap along dominant axis
         const bool horiz = std::fabs(La.dy()) < std::fabs(La.dx());
         const double a1 = horiz ? La.x1() : La.y1();
         const double a2 = horiz ? La.x2() : La.y2();
@@ -1938,7 +2014,6 @@ int DrawingCanvas::refineVector(const RefineParams& p)
         if (!intervalsOverlap1D(a1, a2, b1, b2, p.collinearOverlapPx))
             continue;
 
-        // Merge to extremes
         QVector<QPointF> pts{La.p1(), La.p2(), Lb.p1(), Lb.p2()};
         std::sort(pts.begin(), pts.end(), [&](const QPointF& u, const QPointF& v){
             return horiz ? (u.x() < v.x()) : (u.y() < v.y());
@@ -1956,7 +2031,6 @@ int DrawingCanvas::refineVector(const RefineParams& p)
             if (ln == other) continue;
             QLineF M = other->line();
 
-            // angle gate: close to 90° (T) OR very close to 0° (collinear)
             const double ab = angleBetweenDeg(L, M);
             const bool okAngle =
                 std::fabs(ab - 90.0) <= p.extendAngleDeg || std::fabs(ab - 0.0) <= p.axisSnapDeg;
@@ -1975,7 +2049,7 @@ int DrawingCanvas::refineVector(const RefineParams& p)
         ln->setLine(L);
     }
 
-    // 7) drop near-duplicates (rare but can appear after merges/extends)
+    // 7) drop near-duplicates
     for (int i=0;i<lines.size();++i) for (int j=i+1;j<lines.size();++j) {
         if (!lines[i] || !lines[j]) continue;
         if (nearLineDuplicate(lines[i]->line(), lines[j]->line(), /*tolPx*/ 1.0)) {
@@ -1988,10 +2062,8 @@ int DrawingCanvas::refineVector(const RefineParams& p)
     return fixes;
 }
 
-
 int DrawingCanvas::refineOverlapsLight(double tolPx, double coverage, double axisSnapDeg)
 {
-    // 1) Snapshot all line items (no scene mutation while we inspect).
     struct Rec { QGraphicsLineItem* it; QLineF L; };
     QVector<Rec> recs;
     recs.reserve(scene()->items().size());
@@ -2003,11 +2075,6 @@ int DrawingCanvas::refineOverlapsLight(double tolPx, double coverage, double axi
     if (recs.size() < 2) return 0;
 
     QVector<bool> alive(recs.size(), true);
-
-    // For each pair, if they are near-duplicates:
-    //   - choose a survivor (longer segment),
-    //   - update survivor geometry to the union/average,
-    //   - mark the other for deletion (but don't delete yet).
     QSet<QGraphicsLineItem*> toDelete;
 
     for (int i = 0; i < recs.size(); ++i) {
@@ -2020,23 +2087,19 @@ int DrawingCanvas::refineOverlapsLight(double tolPx, double coverage, double axi
             if (!computeMerged(recs[i].L, recs[j].L, tolPx, coverage, axisSnapDeg, merged))
                 continue;
 
-            // keep longer one
             const double li2 = length2(recs[i].L);
             const double lj2 = length2(recs[j].L);
             const int keep = (li2 >= lj2) ? i : j;
             const int drop = (keep == i) ? j : i;
 
-            // Update survivor geometry now (so it can merge with others later)
             recs[keep].L = merged;
             if (recs[keep].it) recs[keep].it->setLine(merged);
 
-            // Mark the other for deletion after we finish scanning
             alive[drop] = false;
             if (recs[drop].it) toDelete.insert(recs[drop].it);
         }
     }
 
-    // 3) Apply deletions safely.
     int removed = 0;
     for (QGraphicsLineItem* item : toDelete) {
         if (!item) continue;
@@ -2120,7 +2183,7 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
     };
 
     QHash<qint64, QVector<int>> buckets;
-    QVector<QPointF> vSum;  // running sum per vertex
+    QVector<QPointF> vSum;
     QVector<int>     vCnt;
 
     auto nearbyVerts = [&](const QPointF& q)->QVector<int> {
@@ -2190,7 +2253,6 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
             if (L.length() < p.minLenPx) continue;
             dcAxisSnap(L, p.axisSnapDeg);
 
-            // avoid duplicating existing connection
             bool dup=false;
             for (int li : incident[va]) {
                 int other = (ends[2*li+0].vid==va)? ends[2*li+1].vid : ends[2*li+0].vid;
@@ -2211,7 +2273,7 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
 
         auto dirAngle = [](const QLineF& L)->double {
             double a = std::atan2(L.dy(), L.dx());
-            if (a < 0) a += M_PI;           // [0,π)
+            if (a < 0) a += M_PI;
             return a;
         };
 
@@ -2220,12 +2282,11 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
             QLineF A = outNew[i];
             if (A.length() < p.minLenPx) continue;
 
-            // reference axis from A
-            const QPointF O( 0.25*(A.x1()+A.x2()), 0.25*(A.y1()+A.y2()) ); // some origin (quarter of sum)
+            const QPointF O( 0.25*(A.x1()+A.x2()), 0.25*(A.y1()+A.y2()) );
             const double lenA = std::hypot(A.dx(), A.dy());
             if (lenA <= 1e-9) continue;
-            const QPointF u( A.dx()/lenA, A.dy()/lenA );     // axis unit
-            const QPointF nrm(-u.y(), u.x());                // perp
+            const QPointF u( A.dx()/lenA, A.dy()/lenA );
+            const QPointF nrm(-u.y(), u.x());
 
             auto projS = [&](const QPointF& P){ return dot2D(QPointF(P.x()-O.x(), P.y()-O.y()), u); };
             auto projT = [&](const QPointF& P){ return dot2D(QPointF(P.x()-O.x(), P.y()-O.y()), nrm); };
@@ -2242,22 +2303,18 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
                 QLineF B = outNew[j];
                 if (B.length() < p.minLenPx) continue;
 
-                // angle similarity
                 double dAng = std::fabs(dirAngle(A) - dirAngle(B));
                 dAng = std::min(dAng, M_PI - dAng);
                 if (dAng > angTolRad) continue;
 
-                // separation (signed offset of midpoints)
                 const double offB = 0.5*(projT(B.p1()) + projT(B.p2()));
                 if (std::fabs(offA - offB) > sepTol) continue;
 
-                // overlap along axis
                 double sB1 = projS(B.p1()), sB2 = projS(B.p2());
                 if (sB1 > sB2) std::swap(sB1, sB2);
                 const double ov = std::max(0.0, std::min(sA2, sB2) - std::max(sA1, sB1));
                 if (ov < minOv) continue;
 
-                // accept into group
                 sMin   = std::min(sMin, sB1);
                 sMax   = std::max(sMax, sB2);
                 offSum += offB; ++offCnt;
@@ -2273,7 +2330,6 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
             outNew[i] = QLineF(P,Q);
         }
 
-        // Optional: ensure delete indices are unique & sorted (nice for apply)
         std::sort(outDeleteIdx.begin(), outDeleteIdx.end());
         outDeleteIdx.erase(std::unique(outDeleteIdx.begin(), outDeleteIdx.end()), outDeleteIdx.end());
     }
@@ -2281,7 +2337,6 @@ void DrawingCanvas::computeRefinePreview(const QList<QGraphicsLineItem*>& lines,
 
 void DrawingCanvas::updateRefinePreview(const RefineParams& p)
 {
-    // 1) Drop ONLY the old overlay (if any). Keep any staged data intact.
     if (m_refinePreview) {
         if (m_refinePreview->scene() == m_scene)
             m_scene->removeItem(m_refinePreview);
@@ -2289,7 +2344,6 @@ void DrawingCanvas::updateRefinePreview(const RefineParams& p)
         m_refinePreview = nullptr;
     }
 
-    // 2) Collect lines and compute preview state
     const QList<QGraphicsLineItem*> lines = collectLineItems();
 
     m_refineSrc = QVector<QGraphicsLineItem*>::fromList(lines);
@@ -2299,7 +2353,6 @@ void DrawingCanvas::updateRefinePreview(const RefineParams& p)
 
     computeRefinePreview(lines, p, m_refineNew, m_refineClosures, m_refineDeleteIdx);
 
-    // 3) Build overlay
     m_refinePreview = new QGraphicsItemGroup();
     m_refinePreview->setHandlesChildEvents(false);
     m_refinePreview->setFlag(QGraphicsItem::ItemIsSelectable, false);
@@ -2310,21 +2363,18 @@ void DrawingCanvas::updateRefinePreview(const RefineParams& p)
     QPen addPen    (Qt::darkGreen);  addPen    .setCosmetic(true); addPen    .setStyle(Qt::DashDotLine);
     QPen delPen    (Qt::red);        delPen    .setCosmetic(true); delPen    .setStyle(Qt::DotLine);
 
-    // Replacement geometry (blue)
     for (const QLineF& L : m_refineNew) {
         auto* ghost = new QGraphicsLineItem(L);
         ghost->setPen(changedPen);
         ghost->setZValue(1e6+1);
         m_refinePreview->addToGroup(ghost);
     }
-    // New closures (green)
     for (const QLineF& L : m_refineClosures) {
         auto* ghost = new QGraphicsLineItem(L);
         ghost->setPen(addPen);
         ghost->setZValue(1e6+1);
         m_refinePreview->addToGroup(ghost);
     }
-    // To-be-deleted originals (red at current positions)
     for (int idx : m_refineDeleteIdx) {
         if (idx >= 0 && idx < m_refineSrc.size() && m_refineSrc[idx]) {
             auto* ghost = new QGraphicsLineItem(m_refineSrc[idx]->line());
@@ -2345,10 +2395,9 @@ int DrawingCanvas::applyRefinePreview()
     const int n = std::min(m_refineSrc.size(), m_refineNew.size());
     QSet<int> toDelete = QSet<int>(m_refineDeleteIdx.begin(), m_refineDeleteIdx.end());
 
-    // Apply geometry updates to survivors
     for (int i = 0; i < n; ++i) {
         if (!m_refineSrc[i]) continue;
-        if (toDelete.contains(i)) continue; // will delete
+        if (toDelete.contains(i)) continue;
         const QLineF cur = m_refineSrc[i]->line();
         const QLineF nxt = m_refineNew[i];
         if (cur.p1() != nxt.p1() || cur.p2() != nxt.p2()) {
@@ -2357,7 +2406,6 @@ int DrawingCanvas::applyRefinePreview()
         }
     }
 
-    // Delete thinned duplicates
     for (int idx : toDelete) {
         if (idx >= 0 && idx < m_refineSrc.size() && m_refineSrc[idx]) {
             m_scene->removeItem(m_refineSrc[idx]);
@@ -2366,7 +2414,6 @@ int DrawingCanvas::applyRefinePreview()
         }
     }
 
-    // Add closures
     for (const QLineF& L : m_refineClosures) {
         if (L.length() <= 0.0) continue;
         auto* ln = new QGraphicsLineItem(L);
@@ -2378,7 +2425,6 @@ int DrawingCanvas::applyRefinePreview()
         ++edits;
     }
 
-    // Clean up preview + staged data
     cancelRefinePreview();
 
     scene()->update();
@@ -2388,7 +2434,6 @@ int DrawingCanvas::applyRefinePreview()
 
 void DrawingCanvas::cancelRefinePreview()
 {
-    // Remove overlay if present
     if (m_refinePreview) {
         if (m_refinePreview->scene() == m_scene)
             m_scene->removeItem(m_refinePreview);
@@ -2396,11 +2441,8 @@ void DrawingCanvas::cancelRefinePreview()
         m_refinePreview = nullptr;
     }
 
-    // Clear staged arrays
     m_refineSrc.clear();
     m_refineNew.clear();
     m_refineClosures.clear();
     m_refineDeleteIdx.clear();
 }
-
-
