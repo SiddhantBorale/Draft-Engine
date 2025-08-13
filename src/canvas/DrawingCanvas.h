@@ -61,7 +61,11 @@ private:
 class DrawingCanvas : public QGraphicsView {
     Q_OBJECT
 public:
-
+    // Create/refresh preview of room polygons (from visible, unlocked lines)
+    // weldTolPx: snap endpoints into graph within this pixel tolerance
+    // minArea_m2: discard tiny rooms under this area (in square meters)
+    // axisSnapDeg: small angle gate when building half-edge embedding (keeps it robust)
+   
     //units
     enum class Unit { Millimeter, Centimeter, Meter, Inch, Foot };
 
@@ -116,6 +120,17 @@ public:
 };
 
     
+     void updateRoomsPreview(double weldTolPx = 25.0, double minArea_m2 = 0.0, double axisSnapDeg = 12.0);
+
+    // Apply the current preview (creates polygons + labels on the “Rooms” layer).
+    // Returns number of created items (polygons + labels).
+    int  applyRoomsPreview();
+
+    // Cancel and remove any preview overlay.
+    void cancelRoomsPreview();
+
+    // Quick state
+    bool roomsPreviewActive() const { return m_roomsPreview != nullptr; }
 
 
     enum class Tool { Select, Line, Rect, Ellipse, Polygon, DimLinear, SetScale };
@@ -366,4 +381,14 @@ private:
 
     QString m_units = QStringLiteral("mm");      // label shown in the SetScale prompt
     int     m_unitPrec = 2;
+
+    int  roomsLayerId() const; // stable layer slot for Rooms
+    double projectUnitsPerPixel() const { return (m_pxPerUnit > 1e-12 ? 1.0 / m_pxPerUnit : 0.0); }
+
+    // Preview state
+    QGraphicsItemGroup* m_roomsPreview = nullptr;
+    QVector<QPolygonF>  m_roomsPolysStaged;
+    QVector<QPolygonF>  m_roomsPolysPreview;     // in scene coordinates
+    QVector<double>     m_roomsAreaM2Preview;    // same order as polys
+    int                 m_roomsLayer = 100;      // default Rooms layer id (customize if you like)
 };

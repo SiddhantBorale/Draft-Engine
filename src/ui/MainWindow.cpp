@@ -113,9 +113,6 @@ void MainWindow::setupToolPanel()
     connect(refineBtn, &QPushButton::clicked, this, &MainWindow::refineVector);
     v->addWidget(refineBtn);
 
-    // Or menu:
-    auto* ai = menuBar()->addMenu("&AI");
-    ai->addAction("Refine Vector", QKeySequence("Ctrl+Shift+R"), this, &MainWindow::refineVector);
 
     auto* unitsMenu = menuBar()->addMenu("Units");
     auto addDisp = [&](const QString& name, DrawingCanvas::Unit u){
@@ -364,13 +361,14 @@ void MainWindow::setupMenus()
     edit->addAction("Undo", QKeySequence::Undo, m_undo, &QUndoStack::undo);
     edit->addAction("Redo", QKeySequence::Redo, m_undo, &QUndoStack::redo);
     edit->addSeparator();
-    edit->addAction("Join Lines → Shape", this, [this]{ 
+    edit->addAction("Join Lines → Shape", this, [this]{
         if (!m_canvas->joinSelectedLinesToPolygon(2.0)) {
             QMessageBox::information(this, "Join Lines", "Select 3+ connected lines that form a closed loop.");
         }
     });
     edit->addAction("Apply Fill to Selection", this, [this]{ m_canvas->applyFillToSelection(); });
 
+    // Tools
     auto* tools = menuBar()->addMenu(tr("&Tools"));
     m_actSetScale = tools->addAction(tr("Set &Scale…"));
     m_actSetScale->setShortcut(QKeySequence("Ctrl+Shift+S"));
@@ -381,101 +379,135 @@ void MainWindow::setupMenus()
     view->addAction("Zoom In",    QKeySequence::ZoomIn,  this, &MainWindow::zoomIn);
     view->addAction("Zoom Out",   QKeySequence::ZoomOut, this, &MainWindow::zoomOut);
     view->addAction("Reset Zoom", QKeySequence("Ctrl+0"), this, &MainWindow::zoomReset);
-    view->addAction("Zoom to Fit", QKeySequence('F'), this, &MainWindow::zoomToFit);
+    view->addAction("Zoom to Fit", QKeySequence('F'),     this, &MainWindow::zoomToFit);
 
     // AI
     auto* ai = menuBar()->addMenu("&AI");
     ai->addAction("Blueprint → Vectorise…",
                   QKeySequence("Ctrl+Shift+V"),
                   this, &MainWindow::runBluePrintAI);
-    ai->addAction("Refine Vector (light overlaps)…", QKeySequence("Ctrl+Shift+L"),this, &MainWindow::refineOverlapsLight);
-    // e.g., in constructor after building menus:
-    auto* actRefinePreview = ai->addAction("Refine (Preview)...");
-connect(actRefinePreview, &QAction::triggered, this, [this]{
-    QDialog dlg(this);
-    dlg.setWindowTitle("Refine (Preview)");
-    auto* form = new QFormLayout;
 
-    // Core
-    auto* weld  = new QDoubleSpinBox; weld->setRange(0.1, 50.0); weld->setValue(6.0);  weld->setDecimals(1);
-    auto* close = new QDoubleSpinBox; close->setRange(0.1, 50.0); close->setValue(8.0); close->setDecimals(1);
-    auto* axis  = new QDoubleSpinBox; axis->setRange(0.0, 45.0);  axis->setValue(6.0);  axis->setDecimals(1);
-    auto* minl  = new QDoubleSpinBox; minl->setRange(0.0, 50.0);  minl->setValue(10.0); minl->setDecimals(1);
+    ai->addAction("Refine Vector (light overlaps)…",
+                  QKeySequence("Ctrl+Shift+L"),
+                  this, &MainWindow::refineOverlapsLight);
 
-    form->addRow("Weld tolerance (px):", weld);
-    form->addRow("Close gap (px):",      close);
-    form->addRow("Axis snap (deg):",     axis);
-    form->addRow("Min length (px):",     minl);
+    // Refine (Preview)… dialog
+    QAction* actRefinePreview = ai->addAction("Refine (Preview)...");
+    connect(actRefinePreview, &QAction::triggered, this, [this]{
+        if (!m_canvas) return;
 
-    // --- NEW: parallel stack thinning group ---
-    auto* thinLbl = new QLabel("<b>Parallel stack thinning</b>");
-    form->addRow(thinLbl);
+        QDialog dlg(this);
+        dlg.setWindowTitle("Refine (Preview)");
 
-    auto* thinEnable = new QCheckBox("Enable stack thinning");
-    thinEnable->setChecked(true);
-    form->addRow(QString(), thinEnable);
+        // ---- Form ----
+        auto* form = new QFormLayout;
 
-    auto* sep   = new QDoubleSpinBox; sep->setRange(0.0, 20.0); sep->setValue(3.0);  sep->setDecimals(1);
-    auto* ang   = new QDoubleSpinBox; ang->setRange(0.0, 15.0); ang->setValue(3.0);  ang->setDecimals(1);
-    auto* ovlap = new QDoubleSpinBox; ovlap->setRange(0.0, 200.0); ovlap->setValue(30.0); ovlap->setDecimals(0);
+        // Core
+        auto* weld  = new QDoubleSpinBox; weld->setRange(0.1, 50.0); weld->setValue(6.0);  weld->setDecimals(1);
+        auto* close = new QDoubleSpinBox; close->setRange(0.1, 50.0); close->setValue(8.0); close->setDecimals(1);
+        auto* axis  = new QDoubleSpinBox; axis->setRange(0.0, 45.0);  axis->setValue(6.0);  axis->setDecimals(1);
+        auto* minl  = new QDoubleSpinBox; minl->setRange(0.0, 50.0);  minl->setValue(10.0); minl->setDecimals(1);
 
-    form->addRow("Max separation (px):", sep);
-    form->addRow("Max angle Δ (deg):",   ang);
-    form->addRow("Min overlap (px):",    ovlap);
+        form->addRow("Weld tolerance (px):", weld);
+        form->addRow("Close gap (px):",      close);
+        form->addRow("Axis snap (deg):",     axis);
+        form->addRow("Min length (px):",     minl);
 
-    // Buttons
-    auto* btnPreview = new QPushButton("Preview");
-    auto* btnApply   = new QPushButton("Apply");
-    auto* btnClose   = new QPushButton("Close");
+        // Parallel stack thinning
+        auto* thinLbl = new QLabel("<b>Parallel stack thinning</b>");
+        form->addRow(thinLbl);
 
-    auto* h = new QHBoxLayout;
-    h->addStretch(1);
-    h->addWidget(btnPreview);
-    h->addWidget(btnApply);
-    h->addWidget(btnClose);
+        auto* thinEnable = new QCheckBox("Enable stack thinning");
+        thinEnable->setChecked(true);
+        form->addRow(QString(), thinEnable);
 
-    auto* v = new QVBoxLayout;
-    v->addLayout(form);
-    v->addLayout(h);
-    dlg.setLayout(v);
+        auto* sep   = new QDoubleSpinBox; sep->setRange(0.0, 20.0);   sep->setValue(3.0);  sep->setDecimals(1);
+        auto* ang   = new QDoubleSpinBox; ang->setRange(0.0, 15.0);   ang->setValue(3.0);  ang->setDecimals(1);
+        auto* ovlap = new QDoubleSpinBox; ovlap->setRange(0.0, 200.0); ovlap->setValue(30.0); ovlap->setDecimals(0);
 
-    auto sendParams = [this, weld, close, axis, minl, thinEnable, sep, ang, ovlap](){
-        DrawingCanvas::RefineParams p;
-        p.weldTolPx   = weld->value();
-        p.closeTolPx  = close->value();
-        p.axisSnapDeg = axis->value();
-        p.minLenPx    = minl->value();
+        form->addRow("Max separation (px):", sep);
+        form->addRow("Max angle Δ (deg):",   ang);
+        form->addRow("Min overlap (px):",    ovlap);
 
-        p.stackEnabled    = thinEnable->isChecked();
-        p.stackSepPx      = sep->value();
-        p.stackAngleDeg   = ang->value();
-        p.stackMinOverlap = ovlap->value();
+        // Buttons
+        auto* btnPreview = new QPushButton("Preview");
+        auto* btnApply   = new QPushButton("Apply");
+        auto* btnClose   = new QPushButton("Close");
 
-        m_canvas->updateRefinePreview(p);
-    };
+        auto* h = new QHBoxLayout;
+        h->addStretch(1);
+        h->addWidget(btnPreview);
+        h->addWidget(btnApply);
+        h->addWidget(btnClose);
 
-    connect(btnPreview, &QPushButton::clicked, this, sendParams);
-    connect(btnApply,   &QPushButton::clicked, this, [this]{
-        const int edits = m_canvas->applyRefinePreview();
-        statusBar()->showMessage(QString("Refine applied: %1 edits").arg(edits), 3000);
+        auto* v = new QVBoxLayout;
+        v->addLayout(form);
+        v->addLayout(h);
+        dlg.setLayout(v);
+
+        // Send params to canvas
+        auto sendParams = [this, weld, close, axis, minl, thinEnable, sep, ang, ovlap](){
+            DrawingCanvas::RefineParams p;
+            p.weldTolPx   = weld->value();
+            p.closeTolPx  = close->value();
+            p.axisSnapDeg = axis->value();
+            p.minLenPx    = minl->value();
+
+            p.stackEnabled    = thinEnable->isChecked();
+            p.stackSepPx      = sep->value();
+            p.stackAngleDeg   = ang->value();
+            p.stackMinOverlap = ovlap->value();
+
+            m_canvas->updateRefinePreview(p);
+        };
+
+        // Wire buttons
+        connect(btnPreview, &QPushButton::clicked, &dlg, [sendParams]{ sendParams(); });
+        connect(btnApply,   &QPushButton::clicked, &dlg, [this]{
+            const int edits = m_canvas->applyRefinePreview();
+            if (statusBar()) statusBar()->showMessage(QString("Refine applied: %1 edits").arg(edits), 3000);
+        });
+        connect(btnClose,   &QPushButton::clicked, &dlg, &QDialog::accept);
+
+        // Live preview
+        auto live = [&dlg, sendParams](QDoubleSpinBox* sp){
+            QObject::connect(sp, &QDoubleSpinBox::valueChanged, &dlg, [sendParams](double){ sendParams(); });
+        };
+        live(weld); live(close); live(axis); live(minl); live(sep); live(ang); live(ovlap);
+        QObject::connect(thinEnable, &QCheckBox::toggled, &dlg, [sendParams](bool){ sendParams(); });
+
+        // Kick an initial preview
+        sendParams();
+        dlg.exec();
+
+        // Ensure overlay removed if user closes without Apply
+        m_canvas->cancelRefinePreview();
     });
-    connect(btnClose,   &QPushButton::clicked, &dlg, &QDialog::accept);
 
-    // live preview
-    auto live = [sendParams](auto* w){
-        QObject::connect(w, SIGNAL(valueChanged(double)), w, SLOT(update())); // noop to keep moc happy
-        QObject::connect(w, &QDoubleSpinBox::valueChanged, [sendParams](double){ sendParams(); });
-    };
-    live(weld); live(close); live(axis); live(minl); live(sep); live(ang); live(ovlap);
-    QObject::connect(thinEnable, &QCheckBox::toggled, [sendParams](bool){ sendParams(); });
+    // === Auto-rooms actions ===
+    QAction* actRoomsPreview = ai->addAction(tr("Auto-rooms (Preview)"));
+    actRoomsPreview->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    connect(actRoomsPreview, &QAction::triggered, this, [this]{
+        if (!m_canvas) return;
+        m_canvas->updateRoomsPreview(/*weldTolPx*/6.0, /*minArea_m2*/0.4, /*axisSnapDeg*/6.0);
+    });
 
-    sendParams();
-    dlg.exec();
-    m_canvas->cancelRefinePreview(); // ensure overlay removed if user closes without Apply
-});
+    QAction* actRoomsApply = ai->addAction(tr("Apply Auto-rooms"));
+    actRoomsApply->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    connect(actRoomsApply, &QAction::triggered, this, [this]{
+        if (!m_canvas) return;
+        const int added = m_canvas->applyRoomsPreview();
+        if (statusBar()) statusBar()->showMessage(tr("Auto-rooms: %1 items added").arg(added), 3000);
+    });
 
-              
-}   
+    QAction* actRoomsCancel = ai->addAction(tr("Cancel Auto-rooms Preview"));
+    actRoomsCancel->setShortcut(QKeySequence(Qt::Key_Escape));
+    connect(actRoomsCancel, &QAction::triggered, this, [this]{
+        if (!m_canvas) return;
+        m_canvas->cancelRoomsPreview();
+    });
+}
+
 
 void MainWindow::setScaleInteractive()
 {

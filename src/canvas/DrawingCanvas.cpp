@@ -34,6 +34,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
+#include <QDebug>
 
 // --- Shim wrappers so legacy free-function calls still work ---
 // ---- Private helper definitions for DrawingCanvas (declared in .h) ----
@@ -2040,7 +2042,7 @@ int DrawingCanvas::refineVector(const RefineParams& p)
                 QPointF P = (k==0 ? L.p1() : L.p2());
                 double t=0;
                 QPointF Q = projectPointOnSegment(P, M.p1(), M.p2(), &t);
-                if (t > 0.0 && t < 1.0 && dist2(P, Q) <= extend2) {
+                if (t > 0.0 && t < 1.0 && dist2(P, Q) <= p.extendPx*p.extendPx) {
                     if (k==0) L.setP1(Q); else L.setP2(Q);
                     ++fixes;
                 }
@@ -2445,4 +2447,330 @@ void DrawingCanvas::cancelRefinePreview()
     m_refineNew.clear();
     m_refineClosures.clear();
     m_refineDeleteIdx.clear();
+}
+
+// =========================== Auto-Rooms From Walls ===========================
+
+// Small utility: polygon area (px^2), positive for CCW
+static double polyAreaPx2(const QPolygonF& p) {
+    if (p.size() < 3) return 0.0;
+    double a = 0.0;
+    for (int i = 0, n = p.size(); i < n; ++i) {
+        const QPointF& u = p[i];
+        const QPointF& v = p[(i+1) % n];
+        a += (u.x() * v.y() - v.x() * u.y());
+    }
+    return 0.5 * a;
+}
+
+int DrawingCanvas::roomsLayerId() const
+{
+    // You may later expose a settings UI for the Rooms layer id.
+    // For now we keep the member m_roomsLayer, but ensure the layer exists.
+    const_cast<DrawingCanvas*>(this)->ensureLayer(m_roomsLayer);
+    return m_roomsLayer;
+}
+
+// ===================== Auto-rooms (preview/apply) =====================
+namespace {
+
+// bucket helper – group coordinates within tolerance
+static inline double bucketize(double v, double tol) {
+    if (tol <= 0.0) return v;
+    return std::round(v / tol) * tol;
+}
+
+struct Interval { double a, b; }; // [a,b] along the running axis
+
+static void normalizeAB(double& a, double& b) { if (a>b) std::swap(a,b); }
+
+// Merge a new [a,b] into a sorted, gapped-merge set of intervals (gap <= tol joins)
+static void addIntervalMerged(QVector<Interval>& ivals, double a, double b, double tol) {
+    normalizeAB(a,b);
+    if (b <= a) return;
+
+    ivals.push_back({a,b});
+    std::sort(ivals.begin(), ivals.end(), [](const Interval& u, const Interval& v){
+        return u.a < v.a;
+    });
+    QVector<Interval> out; out.reserve(ivals.size());
+    for (const auto& it : ivals) {
+        if (out.isEmpty()) { out.push_back(it); continue; }
+        Interval& last = out.back();
+        if (it.a <= last.b + tol) {
+            last.b = std::max(last.b, it.b);
+        } else {
+            out.push_back(it);
+        }
+    }
+    ivals.swap(out);
+}
+
+// Check whether the union of intervals covers [lo,hi], tolerating small gaps <= tol
+static bool coveredWithin(const QVector<Interval>& ivals, double lo, double hi, double tol) {
+    normalizeAB(lo, hi);
+    if (hi <= lo) return false;
+    if (ivals.isEmpty()) return false;
+
+    // walk intervals that intersect [lo,hi]
+    double cur = lo;
+    for (const auto& I : ivals) {
+        if (I.b < lo) continue;
+        if (I.a > hi) break;
+        if (I.a > cur + tol) return false;      // uncovered gap larger than tol
+        cur = std::max(cur, I.b);
+        if (cur >= hi - tol) return true;       // covered to end (within tol)
+    }
+    return (cur >= hi - tol);
+}
+
+// Soft coverage: expand intervals by tolPx and allow total uncovered remainder <= maxHolePx
+static bool coveredWithinSoft(const QVector<Interval>& ivs,
+                              double a, double b,
+                              double tolPx,
+                              double maxHolePx)
+{
+    if (a > b) std::swap(a, b);
+    a -= tolPx; b += tolPx;
+
+    struct Seg { double s, e; };
+    QVector<Seg> segs; segs.reserve(ivs.size());
+    for (const auto& iv : ivs) {
+        double s = iv.a - tolPx, e = iv.b + tolPx;
+        if (e < a || s > b) continue;
+        segs.push_back({ std::max(s, a), std::min(e, b) });
+    }
+    if (segs.isEmpty()) return false;
+
+    std::sort(segs.begin(), segs.end(), [](const Seg& u, const Seg& v){ return u.s < v.s; });
+
+    double covered = 0.0;
+    double cs = segs[0].s, ce = segs[0].e;
+    for (int i = 1; i < segs.size(); ++i) {
+        if (segs[i].s <= ce + maxHolePx) {
+            ce = std::max(ce, segs[i].e);
+        } else {
+            covered += (ce - cs);
+            cs = segs[i].s; ce = segs[i].e;
+        }
+    }
+    covered += (ce - cs);
+
+    // Accept if the uncovered remainder is at most maxHolePx
+    return covered >= (b - a) - maxHolePx;
+}
+
+} // namespace
+
+void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, double axisSnapDeg)
+{
+    // Nuke previous preview
+    cancelRoomsPreview();
+
+    // ---------- harvest wall segments from ALL primitives ----------
+    QMap<double, QVector<Interval>> H;  // horizontal rails at y
+    QMap<double, QVector<Interval>> V;  // vertical   rails at x
+
+    auto includeItem = [&](QGraphicsItem* it)->bool {
+        if (!it) return false;
+        const int layerId = it->data(0).toInt();
+        return it->isVisible() && isLayerVisible(layerId) && !isLayerLocked(layerId);
+    };
+
+    auto addSeg = [&](const QPointF& P0, const QPointF& P1){
+        QLineF L(P0, P1);
+        if (L.length() < 1e-3) return;
+
+        // snap near 0° / 90°
+        dcAxisSnap(L, axisSnapDeg);
+
+        const bool horiz = std::fabs(L.dy()) < std::fabs(L.dx());
+        if (horiz) {
+            const double y  = 0.5*(L.y1()+L.y2());
+            const double yk = bucketize(y, weldTolPx);
+            double x1 = L.x1(), x2 = L.x2();
+            normalizeAB(x1, x2);
+            addIntervalMerged(H[yk], x1, x2, weldTolPx);
+        } else {
+            const double x  = 0.5*(L.x1()+L.x2());
+            const double xk = bucketize(x, weldTolPx);
+            double y1 = L.y1(), y2 = L.y2();
+            normalizeAB(y1, y2);
+            addIntervalMerged(V[xk], y1, y2, weldTolPx);
+        }
+    };
+
+    int nLines=0, nRects=0, nPolys=0, nPaths=0;
+
+    for (QGraphicsItem* it : scene()->items()) {
+        if (!includeItem(it)) continue;
+
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+            const QLineF L = ln->line();
+            addSeg(ln->mapToScene(L.p1()), ln->mapToScene(L.p2()));
+            ++nLines;
+        } else if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(it)) {
+            QPolygonF poly = rc->mapToScene(QPolygonF(rc->rect()));
+            for (int i=0;i<poly.size();++i)
+                addSeg(poly[i], poly[(i+1)%poly.size()]);
+            ++nRects;
+        } else if (auto* pg = qgraphicsitem_cast<QGraphicsPolygonItem*>(it)) {
+            QPolygonF poly = pg->mapToScene(pg->polygon());
+            if (poly.size() >= 2)
+                for (int i=0;i<poly.size();++i)
+                    addSeg(poly[i], poly[(i+1)%poly.size()]);
+            ++nPolys;
+        } else if (auto* pth = qgraphicsitem_cast<QGraphicsPathItem*>(it)) {
+            // convert the *scene-mapped* painter path to polygons
+            const QPainterPath scenePath = pth->mapToScene(pth->path());
+            const auto polys = scenePath.toSubpathPolygons(); // already in scene coords
+            for (const QPolygonF& lp : polys) {
+                if (lp.size() < 2) continue;
+                for (int i=0;i<lp.size(); ++i)
+                    addSeg(lp[i], lp[(i+1)%lp.size()]);
+            }
+            ++nPaths;
+        }
+    }
+
+    qDebug() << "[rooms] items(lines/rects/polys/paths):"
+             << nLines << nRects << nPolys << nPaths
+             << "rails H:" << H.size() << "V:" << V.size();
+
+    if (H.isEmpty() || V.isEmpty()) {
+        // nothing usable collected
+        return;
+    }
+
+    // ---------- build grid from rail keys + their endpoints ----------
+    QSet<double> xsSet, ysSet;
+
+    for (auto it = H.cbegin(); it != H.cend(); ++it) {
+        ysSet.insert(it.key());
+        for (const auto& r : it.value()) {
+            xsSet.insert(bucketize(r.a, weldTolPx));
+            xsSet.insert(bucketize(r.b, weldTolPx));
+        }
+    }
+    for (auto it = V.cbegin(); it != V.cend(); ++it) {
+        xsSet.insert(it.key());
+        for (const auto& r : it.value()) {
+            ysSet.insert(bucketize(r.a, weldTolPx));
+            ysSet.insert(bucketize(r.b, weldTolPx));
+        }
+    }
+
+    QVector<double> xs = xsSet.values().toVector();
+    QVector<double> ys = ysSet.values().toVector();
+    std::sort(xs.begin(), xs.end());
+    std::sort(ys.begin(), ys.end());
+
+    // ---------- px² threshold from m² (safe if scale not set) ----------
+    const double unit_mm = factorToMM(m_projectUnit);         // mm per project-unit
+    const double unit_m  = unit_mm / 1000.0;
+    const double pxPerU  = std::max(1e-9, m_pxPerUnit);
+    const double px_to_m = (1.0 / pxPerU) * unit_m;
+    const double minArea_px2 = (minArea_m2 > 0.0 && px_to_m > 0.0)
+                               ? (minArea_m2 / (px_to_m*px_to_m))
+                               : 0.0; // disable threshold if scale unknown
+
+    // ---------- cell test ----------
+    QVector<QPolygonF> polys;
+    int tested=0, passed=0;
+
+    for (int yi=0; yi<ys.size()-1; ++yi) {
+        const double y1 = ys[yi];
+        const double y2 = ys[yi+1];
+        if (std::fabs(y2 - y1) < 1e-6) continue;
+
+        const auto& topRuns = H[y1];
+        const auto& botRuns = H[y2];
+
+        for (int xi=0; xi<xs.size()-1; ++xi) {
+            const double x1 = xs[xi];
+            const double x2 = xs[xi+1];
+            if (std::fabs(x2 - x1) < 1e-6) continue;
+            ++tested;
+
+            const auto& leftRuns  = V[x1];
+            const auto& rightRuns = V[x2];
+
+            const double hole = weldTolPx * 1.25;  // tolerate tiny gaps
+            if (!coveredWithinSoft(topRuns,   x1, x2, weldTolPx, hole)) continue;
+            if (!coveredWithinSoft(botRuns,   x1, x2, weldTolPx, hole)) continue;
+            if (!coveredWithinSoft(leftRuns,  y1, y2, weldTolPx, hole)) continue;
+            if (!coveredWithinSoft(rightRuns, y1, y2, weldTolPx, hole)) continue;
+
+            const double area_px2 = (x2 - x1) * (y2 - y1);
+            if (area_px2 < minArea_px2) continue;
+
+            QPolygonF poly;
+            poly << QPointF(x1,y1) << QPointF(x2,y1)
+                 << QPointF(x2,y2) << QPointF(x1,y2);
+            polys.push_back(poly);
+            ++passed;
+        }
+    }
+
+    qDebug() << "[rooms] cells tested:" << tested << "rooms found:" << passed;
+
+    if (polys.isEmpty()) return;
+
+    // ---------- overlay ----------
+    m_roomsPreview = new QGraphicsItemGroup();
+    m_roomsPreview->setHandlesChildEvents(false);
+    m_roomsPreview->setFlag(QGraphicsItem::ItemIsSelectable, false);
+    m_roomsPreview->setZValue(1e6);
+    scene()->addItem(m_roomsPreview);
+
+    const QPen   pen(QColor(0,160,0), 0, Qt::DashLine);
+    const QBrush br(QColor(0,160,0,60));
+
+    for (const QPolygonF& poly : polys) {
+        auto* it = new QGraphicsPolygonItem(poly);
+        it->setPen(pen);
+        it->setBrush(br);
+        it->setZValue(1e6+1);
+        m_roomsPreview->addToGroup(it);
+    }
+
+    m_roomsPolysStaged = polys;
+    viewport()->update();
+}
+
+
+
+int DrawingCanvas::applyRoomsPreview()
+{
+    int added = 0;
+
+    if (!m_roomsPolysStaged.isEmpty()) {
+        // Style for committed rooms
+        QPen pen(QColor(0,130,0), 0);
+        QBrush br(QColor(0,130,0,40));
+
+        for (const QPolygonF& poly : m_roomsPolysStaged) {
+            auto* it = scene()->addPolygon(poly, pen, br);
+            it->setData(0, m_layer);
+            it->setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+            applyLayerStateToItem(it, m_layer);
+            ++added;
+        }
+    }
+
+    cancelRoomsPreview();
+    return added;
+}
+
+void DrawingCanvas::cancelRoomsPreview()
+{
+    if (m_roomsPreview) {
+        if (m_roomsPreview->scene() == scene())
+            scene()->removeItem(m_roomsPreview);
+        delete m_roomsPreview;
+        m_roomsPreview = nullptr;
+    }
+    m_roomsPolysStaged.clear();
+    if (scene()) scene()->update();
+    if (viewport()) viewport()->update();
 }
