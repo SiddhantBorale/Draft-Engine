@@ -59,19 +59,20 @@ class DrawingCanvas : public QGraphicsView {
 public:
     struct RefineParams {
     // distances (pixels)
-    double gapPx            = 6.0;   // close endpoints if within this
-    double mergePx          = 4.0;   // treat endpoints as same if within this
-    double extendPx         = 6.0;   // extend endpoints to hit a nearby segment
-    double minLenPx         = 6.0;   // delete segments shorter than this
-    double collinearOverlapPx = 4.0; // need at least this 1-D overlap to merge
+    double gapPx            = 1.0;   // close endpoints if within this
+    double mergePx          = 1.0;   // treat endpoints as same if within this
+    double extendPx         = 1.0;   // extend endpoints to hit a nearby segment
+    double minLenPx         = 20.0;   // delete segments shorter than this
+    double collinearOverlapPx = 2.0; // need at least this 1-D overlap to merge
 
     // angles
-    double axisSnapDeg      = 2.0;   // snap to 0/90 only if within this
-    double axisSnapMinLen   = 48.0;  // but only if the segment is at least this long
-    double extendAngleDeg   = 15.0;  // allow extending only if near 90°±this to the target
+    double axisSnapDeg      = 85.0;   // snap to 0/90 only if within this
+    double axisSnapMinLen   = 50.0;  // but only if the segment is at least this long
+    double extendAngleDeg   = 85.0;  // allow extending only if near 90°±this to the target
 
     // (You can make presets by copying and tweaking these numbers.)
 };
+
     
 
 
@@ -79,6 +80,8 @@ public:
     explicit DrawingCanvas(QWidget* parent = nullptr);
 
     // Layer controls
+    int refineOverlapsLight(double tolPx = 1.5, double coverage = 0.95, double axisSnapDeg = 3);
+
     int refineVector();
     int refineVector(const RefineParams& p);
     void setDimUnits(const QString& u) { m_dimStyle.unit = u; }

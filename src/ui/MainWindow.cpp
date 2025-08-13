@@ -265,6 +265,13 @@ void MainWindow::changeFillPattern(int idx)
     m_canvas->setFillPattern(s);
 }
 
+void MainWindow::refineOverlapsLight()
+{
+    // gentle defaults: ~2 px tolerance, 80% overlap, ≤3° angle diff
+    const int n = m_canvas->refineOverlapsLight(2.0, 0.80, 3.0);
+    statusBar()->showMessage(QString("Overlap cleanup: %1 merged").arg(n), 3000);
+}
+
 
 /* ───────────────────────────  Layers dock  ───────────────────────── */
 void MainWindow::setupLayersDock()
@@ -354,7 +361,9 @@ void MainWindow::setupMenus()
     ai->addAction("Blueprint → Vectorise…",
                   QKeySequence("Ctrl+Shift+V"),
                   this, &MainWindow::runBluePrintAI);
-}
+    ai->addAction("Refine Vector (light overlaps)…", QKeySequence("Ctrl+Shift+L"),this, &MainWindow::refineOverlapsLight);
+              
+}   
 
 void MainWindow::layerItemChanged(QTreeWidgetItem* it, int column)
 {

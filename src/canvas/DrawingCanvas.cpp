@@ -19,6 +19,8 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QFile>
+#include <QSet>
+
 
 #include <QtSvg/QSvgRenderer>
 #include <QtSvg/QSvgGenerator>
@@ -1636,16 +1638,130 @@ namespace {
     inline double segLen2(const QLineF& L) {
         return dist2(L.p1(), L.p2());
     }
+    inline double length2(const QLineF& L){ return dist2(L.p1(), L.p2()); }
+
+// signed angle difference in degrees in [0,90]
+inline double angleDiffDeg(const QLineF& A, const QLineF& B){
+    const double a1 = std::atan2(A.dy(), A.dx());
+    const double a2 = std::atan2(B.dy(), B.dx());
+    double d = std::fabs(a1 - a2);
+    d = std::min(d, M_PI - d);
+    return d * 180.0 / M_PI;
 }
 
+struct OverlapMerge {
+    QLineF merged;
+    bool   ok = false;
+};
 
+// Decide if A and B are near duplicates (parallel & overlapping) and produce an averaged line.
+// tolPx      : max perpendicular distance between the two lines
+// coverFrac  : required overlap as fraction of the shorter projected length
+// axisSnapDeg: max angle difference allowed (deg)
+inline OverlapMerge overlappedMostly(const QLineF& A, const QLineF& B,
+                                     double tolPx, double coverFrac, double axisSnapDeg)
+{
+    OverlapMerge out;
 
+    // 1) roughly parallel?
+    if (angleDiffDeg(A, B) > axisSnapDeg) return out;
 
-static double lineAngleDeg(const QLineF& L){
-    // [0,180)
-    double a = std::atan2(L.dy(), L.dx()) * 180.0 / M_PI;
-    if (a < 0) a += 180.0;
-    return a;
+    // Use dominant orientation
+    const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
+
+    // 2) perpendicular separation (average constant coord)
+    auto avgY = [](const QLineF& L){ return 0.5*(L.y1()+L.y2()); };
+    auto avgX = [](const QLineF& L){ return 0.5*(L.x1()+L.x2()); };
+
+    if (horiz) {
+        const double yA = avgY(A), yB = avgY(B);
+        if (std::fabs(yA - yB) > tolPx) return out;
+
+        // Project to X and test overlap
+        const double ax1 = std::min(A.x1(), A.x2());
+        const double ax2 = std::max(A.x1(), A.x2());
+        const double bx1 = std::min(B.x1(), B.x2());
+        const double bx2 = std::max(B.x1(), B.x2());
+
+        const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
+        const double shortLen = std::min(ax2-ax1, bx2-bx1);
+        if (shortLen <= 1e-6) return out;
+        if (overlap < coverFrac * shortLen) return out;
+
+        const double y = 0.5*(yA + yB);
+        const double x1 = std::min(ax1, bx1);
+        const double x2 = std::max(ax2, bx2);
+        out.merged = QLineF(QPointF(x1, y), QPointF(x2, y));
+        out.ok = true;
+        return out;
+    } else {
+        const double xA = avgX(A), xB = avgX(B);
+        if (std::fabs(xA - xB) > tolPx) return out;
+
+        // Project to Y and test overlap
+        const double ay1 = std::min(A.y1(), A.y2());
+        const double ay2 = std::max(A.y1(), A.y2());
+        const double by1 = std::min(B.y1(), B.y2());
+        const double by2 = std::max(B.y1(), B.y2());
+
+        const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
+        const double shortLen = std::min(ay2-ay1, by2-by1);
+        if (shortLen <= 1e-6) return out;
+        if (overlap < coverFrac * shortLen) return out;
+
+        const double x = 0.5*(xA + xB);
+        const double y1 = std::min(ay1, by1);
+        const double y2 = std::max(ay2, by2);
+        out.merged = QLineF(QPointF(x, y1), QPointF(x, y2));
+        out.ok = true;
+        return out;
+    }
+}
+static bool computeMerged(const QLineF& A, const QLineF& B,
+                          double tolPx, double coverFrac, double axisSnapDeg,
+                          QLineF& out)
+{
+    if (angleDiffDeg(A, B) > axisSnapDeg) return false;
+
+    const bool horiz = std::fabs(A.dy()) < std::fabs(A.dx());
+
+    if (horiz) {
+        const double yA = 0.5*(A.y1()+A.y2());
+        const double yB = 0.5*(B.y1()+B.y2());
+        if (std::fabs(yA - yB) > tolPx) return false;
+
+        const double ax1 = std::min(A.x1(), A.x2());
+        const double ax2 = std::max(A.x1(), A.x2());
+        const double bx1 = std::min(B.x1(), B.x2());
+        const double bx2 = std::max(B.x1(), B.x2());
+
+        const double overlap = std::max(0.0, std::min(ax2, bx2) - std::max(ax1, bx1));
+        const double shortLen = std::min(ax2 - ax1, bx2 - bx1);
+        if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+
+        const double y = 0.5*(yA + yB);
+        out = QLineF(QPointF(std::min(ax1, bx1), y), QPointF(std::max(ax2, bx2), y));
+        return true;
+    } else {
+        const double xA = 0.5*(A.x1()+A.x2());
+        const double xB = 0.5*(B.x1()+B.x2());
+        if (std::fabs(xA - xB) > tolPx) return false;
+
+        const double ay1 = std::min(A.y1(), A.y2());
+        const double ay2 = std::max(A.y1(), A.y2());
+        const double by1 = std::min(B.y1(), B.y2());
+        const double by2 = std::max(B.y1(), B.y2());
+
+        const double overlap = std::max(0.0, std::min(ay2, by2) - std::max(ay1, by1));
+        const double shortLen = std::min(ay2 - ay1, by2 - by1);
+        if (shortLen <= 1e-6 || overlap < coverFrac * shortLen) return false;
+
+        const double x = 0.5*(xA + xB);
+        out = QLineF(QPointF(x, std::min(ay1, by1)), QPointF(x, std::max(ay2, by2)));
+        return true;
+    }
+}
+
 }
 
 
@@ -1732,7 +1848,7 @@ int DrawingCanvas::refineVector(const RefineParams& p)
         QLineF L = ln->line();
         if (segLen2(L) < sqr(p.axisSnapMinLen)) continue;
 
-        const double ang = lineAngleDeg(L); // [0,180)
+        const double ang = angleDeg(L); // [0,180)
         const double dev0  = std::fabs(ang - 0.0);
         const double dev90 = std::fabs(ang - 90.0);
         if (std::min(dev0, dev90) <= p.axisSnapDeg) {
@@ -1873,6 +1989,68 @@ int DrawingCanvas::refineVector(const RefineParams& p)
 }
 
 
+int DrawingCanvas::refineOverlapsLight(double tolPx, double coverage, double axisSnapDeg)
+{
+    // 1) Snapshot all line items (no scene mutation while we inspect).
+    struct Rec { QGraphicsLineItem* it; QLineF L; };
+    QVector<Rec> recs;
+    recs.reserve(scene()->items().size());
+    for (QGraphicsItem* it : scene()->items()) {
+        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+            recs.push_back({ ln, ln->line() });
+        }
+    }
+    if (recs.size() < 2) return 0;
+
+    QVector<bool> alive(recs.size(), true);
+
+    // For each pair, if they are near-duplicates:
+    //   - choose a survivor (longer segment),
+    //   - update survivor geometry to the union/average,
+    //   - mark the other for deletion (but don't delete yet).
+    QSet<QGraphicsLineItem*> toDelete;
+
+    for (int i = 0; i < recs.size(); ++i) {
+        if (!alive[i] || !recs[i].it) continue;
+
+        for (int j = i + 1; j < recs.size(); ++j) {
+            if (!alive[j] || !recs[j].it) continue;
+
+            QLineF merged;
+            if (!computeMerged(recs[i].L, recs[j].L, tolPx, coverage, axisSnapDeg, merged))
+                continue;
+
+            // keep longer one
+            const double li2 = length2(recs[i].L);
+            const double lj2 = length2(recs[j].L);
+            const int keep = (li2 >= lj2) ? i : j;
+            const int drop = (keep == i) ? j : i;
+
+            // Update survivor geometry now (so it can merge with others later)
+            recs[keep].L = merged;
+            if (recs[keep].it) recs[keep].it->setLine(merged);
+
+            // Mark the other for deletion after we finish scanning
+            alive[drop] = false;
+            if (recs[drop].it) toDelete.insert(recs[drop].it);
+        }
+    }
+
+    // 3) Apply deletions safely.
+    int removed = 0;
+    for (QGraphicsLineItem* item : toDelete) {
+        if (!item) continue;
+        if (item->scene() == scene()) scene()->removeItem(item);
+        delete item;
+        ++removed;
+    }
+
+    if (removed) {
+        scene()->update();
+        viewport()->update();
+    }
+    return removed;
+}
 
 
 

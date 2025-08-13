@@ -60,6 +60,8 @@ private slots:
     void layerItemChanged(QTreeWidgetItem* it, int column);
 
     void refineVector();  // auto-clean pass
+    void refineOverlapsLight();  // new
+
 
 
 private:
