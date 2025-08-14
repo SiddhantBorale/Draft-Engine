@@ -1703,6 +1703,7 @@ static QPointF average(const QVector<QPointF>& pts) {
 }
 
 // ---- helpers (place near your other file-scope helpers) ----------------
+// ---- helpers (place near your other file-scope helpers) ----------------
 QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
                                              const QPointF& a,
                                              const QPointF& b,
@@ -1723,6 +1724,7 @@ QPointF DrawingCanvas::projectPointOnSegment(const QPointF& p,
     return QPointF(a.x() + t*vx, a.y() + t*vy);
 }
 
+// Local helpers for geometry (names distinct from class-private ones).
 // Local helpers for geometry (names distinct from class-private ones).
 namespace {
     inline double sqr(double v) { return v * v; }
@@ -2506,6 +2508,28 @@ static void addIntervalMerged(QVector<Interval>& ivals, double a, double b, doub
     ivals.swap(out);
 }
 
+// NEW: require that ONE interval nearly spans [lo,hi] on its own (not just union coverage)
+// NEW: require that ONE interval nearly spans [lo,hi] on its own (not just union coverage)
+static bool coveredByStrongInterval(const QVector<Interval>& ivals,
+                                    double lo, double hi,
+                                    double tol, double minFrac)
+{
+    normalizeAB(lo, hi);
+    if (hi <= lo || ivals.isEmpty()) return false;
+
+    const double span = hi - lo;
+    const double need = std::max(0.0, minFrac * span - tol); // tolerate a tiny slop
+
+    for (const auto& I : ivals) {
+        if (I.b < lo - tol || I.a > hi + tol) continue;
+        const double cover = std::min(I.b, hi) - std::max(I.a, lo);
+        if (cover >= need) return true;
+    }
+    return false;
+}
+
+
+
 // Check whether the union of intervals covers [lo,hi], tolerating small gaps <= tol
 static bool coveredWithin(const QVector<Interval>& ivals, double lo, double hi, double tol) {
     normalizeAB(lo, hi);
@@ -2562,12 +2586,13 @@ static bool coveredWithinSoft(const QVector<Interval>& ivs,
 
 } // namespace
 
-void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, double axisSnapDeg)
+void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, double axisSnapDeg,
+                                       double minSidePx, double minWallSegLenPx, double railCoverFrac,
+                                       double doorGapMaxPx, int minStrongSides)
 {
-    // Nuke previous preview
     cancelRoomsPreview();
 
-    // ---------- harvest wall segments from ALL primitives ----------
+    // ---------- harvest rails ----------
     QMap<double, QVector<Interval>> H;  // horizontal rails at y
     QMap<double, QVector<Interval>> V;  // vertical   rails at x
 
@@ -2579,9 +2604,7 @@ void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, doub
 
     auto addSeg = [&](const QPointF& P0, const QPointF& P1){
         QLineF L(P0, P1);
-        if (L.length() < 1e-3) return;
-
-        // snap near 0° / 90°
+        if (L.length() < std::max<qreal>(1e-3, minWallSegLenPx)) return; // ignore tiny bits
         dcAxisSnap(L, axisSnapDeg);
 
         const bool horiz = std::fabs(L.dy()) < std::fabs(L.dx());
@@ -2601,33 +2624,25 @@ void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, doub
     };
 
     int nLines=0, nRects=0, nPolys=0, nPaths=0;
-
     for (QGraphicsItem* it : scene()->items()) {
         if (!includeItem(it)) continue;
 
         if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
-            const QLineF L = ln->line();
-            addSeg(ln->mapToScene(L.p1()), ln->mapToScene(L.p2()));
-            ++nLines;
+            const QLineF L = ln->line(); addSeg(ln->mapToScene(L.p1()), ln->mapToScene(L.p2())); ++nLines;
         } else if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(it)) {
             QPolygonF poly = rc->mapToScene(QPolygonF(rc->rect()));
-            for (int i=0;i<poly.size();++i)
-                addSeg(poly[i], poly[(i+1)%poly.size()]);
+            for (int i=0;i<poly.size();++i) addSeg(poly[i], poly[(i+1)%poly.size()]);
             ++nRects;
         } else if (auto* pg = qgraphicsitem_cast<QGraphicsPolygonItem*>(it)) {
             QPolygonF poly = pg->mapToScene(pg->polygon());
-            if (poly.size() >= 2)
-                for (int i=0;i<poly.size();++i)
-                    addSeg(poly[i], poly[(i+1)%poly.size()]);
+            if (poly.size() >= 2) for (int i=0;i<poly.size();++i) addSeg(poly[i], poly[(i+1)%poly.size()]);
             ++nPolys;
         } else if (auto* pth = qgraphicsitem_cast<QGraphicsPathItem*>(it)) {
-            // convert the *scene-mapped* painter path to polygons
             const QPainterPath scenePath = pth->mapToScene(pth->path());
-            const auto polys = scenePath.toSubpathPolygons(); // already in scene coords
+            const auto polys = scenePath.toSubpathPolygons();
             for (const QPolygonF& lp : polys) {
                 if (lp.size() < 2) continue;
-                for (int i=0;i<lp.size(); ++i)
-                    addSeg(lp[i], lp[(i+1)%lp.size()]);
+                for (int i=0;i<lp.size(); ++i) addSeg(lp[i], lp[(i+1)%lp.size()]);
             }
             ++nPaths;
         }
@@ -2637,76 +2652,71 @@ void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, doub
              << nLines << nRects << nPolys << nPaths
              << "rails H:" << H.size() << "V:" << V.size();
 
-    if (H.isEmpty() || V.isEmpty()) {
-        // nothing usable collected
-        return;
-    }
+    if (H.isEmpty() || V.isEmpty()) return;
 
-    // ---------- build grid from rail keys + their endpoints ----------
-    QSet<double> xsSet, ysSet;
-
-    for (auto it = H.cbegin(); it != H.cend(); ++it) {
-        ysSet.insert(it.key());
-        for (const auto& r : it.value()) {
-            xsSet.insert(bucketize(r.a, weldTolPx));
-            xsSet.insert(bucketize(r.b, weldTolPx));
-        }
-    }
-    for (auto it = V.cbegin(); it != V.cend(); ++it) {
-        xsSet.insert(it.key());
-        for (const auto& r : it.value()) {
-            ysSet.insert(bucketize(r.a, weldTolPx));
-            ysSet.insert(bucketize(r.b, weldTolPx));
-        }
-    }
-
-    QVector<double> xs = xsSet.values().toVector();
-    QVector<double> ys = ysSet.values().toVector();
+    // ---------- grid ----------
+    QVector<double> ys = H.keys().toVector();
+    QVector<double> xs = V.keys().toVector();
     std::sort(xs.begin(), xs.end());
     std::sort(ys.begin(), ys.end());
 
-    // ---------- px² threshold from m² (safe if scale not set) ----------
-    const double unit_mm = factorToMM(m_projectUnit);         // mm per project-unit
+    // ---------- m² → px² ----------
+    const double unit_mm = factorToMM(m_projectUnit);
     const double unit_m  = unit_mm / 1000.0;
     const double pxPerU  = std::max(1e-9, m_pxPerUnit);
     const double px_to_m = (1.0 / pxPerU) * unit_m;
     const double minArea_px2 = (minArea_m2 > 0.0 && px_to_m > 0.0)
                                ? (minArea_m2 / (px_to_m*px_to_m))
-                               : 0.0; // disable threshold if scale unknown
+                               : 0.0;
 
-    // ---------- cell test ----------
+    // convenience: side check with fallback
+    auto sideOK = [&](const QVector<Interval>& ivs, double a, double b, double tol,
+                      bool* strongOut=nullptr)->bool
+    {
+        const bool strong = coveredByStrongInterval(ivs, a, b, tol, railCoverFrac);
+        if (strongOut) *strongOut = strong;
+        if (strong) return true;
+        // fallback: allow a door-sized gap using the soft-coverage test
+        return coveredWithinSoft(ivs, a, b, tol, doorGapMaxPx);
+    };
+
     QVector<QPolygonF> polys;
     int tested=0, passed=0;
 
     for (int yi=0; yi<ys.size()-1; ++yi) {
-        const double y1 = ys[yi];
-        const double y2 = ys[yi+1];
+        const double y1 = ys[yi], y2 = ys[yi+1];
         if (std::fabs(y2 - y1) < 1e-6) continue;
-
         const auto& topRuns = H[y1];
         const auto& botRuns = H[y2];
 
         for (int xi=0; xi<xs.size()-1; ++xi) {
-            const double x1 = xs[xi];
-            const double x2 = xs[xi+1];
+            const double x1 = xs[xi], x2 = xs[xi+1];
             if (std::fabs(x2 - x1) < 1e-6) continue;
             ++tested;
+
+            if ((x2-x1) < minSidePx || (y2-y1) < minSidePx) continue;
 
             const auto& leftRuns  = V[x1];
             const auto& rightRuns = V[x2];
 
-            const double hole = weldTolPx * 1.25;  // tolerate tiny gaps
-            if (!coveredWithinSoft(topRuns,   x1, x2, weldTolPx, hole)) continue;
-            if (!coveredWithinSoft(botRuns,   x1, x2, weldTolPx, hole)) continue;
-            if (!coveredWithinSoft(leftRuns,  y1, y2, weldTolPx, hole)) continue;
-            if (!coveredWithinSoft(rightRuns, y1, y2, weldTolPx, hole)) continue;
+            const double tol = std::max(0.0, 0.75*weldTolPx);
+
+            bool sTop=false, sBot=false, sL=false, sR=false;
+            const bool okTop = sideOK(topRuns,   x1, x2, tol, &sTop);
+            const bool okBot = sideOK(botRuns,   x1, x2, tol, &sBot);
+            const bool okL   = sideOK(leftRuns,  y1, y2, tol, &sL);
+            const bool okR   = sideOK(rightRuns, y1, y2, tol, &sR);
+
+            if (!(okTop && okBot && okL && okR)) continue;
+
+            const int strongCount = int(sTop) + int(sBot) + int(sL) + int(sR);
+            if (strongCount < minStrongSides) continue;
 
             const double area_px2 = (x2 - x1) * (y2 - y1);
             if (area_px2 < minArea_px2) continue;
 
-            QPolygonF poly;
-            poly << QPointF(x1,y1) << QPointF(x2,y1)
-                 << QPointF(x2,y2) << QPointF(x1,y2);
+            QPolygonF poly; poly << QPointF(x1,y1) << QPointF(x2,y1)
+                                 << QPointF(x2,y2) << QPointF(x1,y2);
             polys.push_back(poly);
             ++passed;
         }
@@ -2737,6 +2747,8 @@ void DrawingCanvas::updateRoomsPreview(double weldTolPx, double minArea_m2, doub
     m_roomsPolysStaged = polys;
     viewport()->update();
 }
+
+
 
 
 

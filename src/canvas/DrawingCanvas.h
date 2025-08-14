@@ -105,7 +105,7 @@ public:
     double axisSnapMinLen   = 50.0;  // but only if the segment is at least this long
     double extendAngleDeg   = 85.0;  // allow extending only if near 90°±this to the target
 
-    double weldTolPx   = 6.0;  // endpoints within this are welded (kept averaged)
+    double weldTolPx   = 8.0;  // endpoints within this are welded (kept averaged)
     double closeTolPx  = 8.0;  // if two free endpoints are within this, add a closure
     double axisSnapDeg = 6.0;  // snap near-horizontal/vertical
     double minLenPx    = 10.0; 
@@ -120,7 +120,16 @@ public:
 };
 
     
-     void updateRoomsPreview(double weldTolPx = 25.0, double minArea_m2 = 0.0, double axisSnapDeg = 12.0);
+    // Auto-rooms (preview) with extra heuristics; defaults keep old behaviour for existing calls.
+    // Auto-rooms (preview) with extra heuristics
+    void updateRoomsPreview(double weldTolPx = 8.0,
+                            double minArea_m2 = 0.3,
+                            double axisSnapDeg = 8.0,
+                            double minSidePx = 35.0,            // min room side (px)
+                            double minWallSegLenPx = 12.0,      // ignore tiny segments
+                            double railCoverFrac = 0.70,        // ≥70% covered by ONE interval
+                            double doorGapMaxPx = 18.0,         // allow a door-sized gap on one side
+                            int    minStrongSides = 3);      // NEW: require a single strong rail covering ≥85%
 
     // Apply the current preview (creates polygons + labels on the “Rooms” layer).
     // Returns number of created items (polygons + labels).

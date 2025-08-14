@@ -63,8 +63,7 @@ private slots:
 
     void refineVector();  // auto-clean pass
     void refineOverlapsLight();  // new
-
-
+    void openAutoRoomsDialog();
 
 private:
 

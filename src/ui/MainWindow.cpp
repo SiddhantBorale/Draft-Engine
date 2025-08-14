@@ -485,12 +485,11 @@ void MainWindow::setupMenus()
     });
 
     // === Auto-rooms actions ===
-    QAction* actRoomsPreview = ai->addAction(tr("Auto-rooms (Preview)"));
-    actRoomsPreview->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
-    connect(actRoomsPreview, &QAction::triggered, this, [this]{
-        if (!m_canvas) return;
-        m_canvas->updateRoomsPreview(/*weldTolPx*/6.0, /*minArea_m2*/0.4, /*axisSnapDeg*/6.0);
-    });
+    // --- Auto-rooms (Controller) ---
+    QAction* actRoomsController = ai->addAction(tr("Auto-rooms (Preview)…"));
+    actRoomsController->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    connect(actRoomsController, &QAction::triggered, this, &MainWindow::openAutoRoomsDialog);
+
 
     QAction* actRoomsApply = ai->addAction(tr("Apply Auto-rooms"));
     actRoomsApply->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
@@ -821,4 +820,100 @@ void MainWindow::refineVector()
 
     const int edits = m_canvas->refineVector(params);
     statusBar()->showMessage(QString("Refine complete — %1 edits").arg(edits), 4000);
+}
+
+void MainWindow::openAutoRoomsDialog()
+{
+    if (!m_canvas) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Auto-rooms — Live Preview"));
+
+    auto* form = new QFormLayout;
+
+    auto* spWeldTolPx   = new QDoubleSpinBox; spWeldTolPx->setRange(0.1, 50.0);  spWeldTolPx->setDecimals(1); spWeldTolPx->setValue(8.0);
+    auto* spAxisSnapDeg = new QDoubleSpinBox; spAxisSnapDeg->setRange(0.0, 20.0); spAxisSnapDeg->setDecimals(1); spAxisSnapDeg->setValue(8.0);
+    auto* spMinAreaM2   = new QDoubleSpinBox; spMinAreaM2->setRange(0.0, 500.0); spMinAreaM2->setDecimals(2); spMinAreaM2->setValue(0.30);
+
+    auto* spMinSidePx   = new QDoubleSpinBox; spMinSidePx->setRange(0.0, 500.0); spMinSidePx->setDecimals(0); spMinSidePx->setValue(35.0);
+    auto* spMinWallPx   = new QDoubleSpinBox; spMinWallPx->setRange(0.0, 200.0); spMinWallPx->setDecimals(0); spMinWallPx->setValue(12.0);
+
+    auto* spRailFrac    = new QDoubleSpinBox; spRailFrac->setRange(0.0, 1.0);    spRailFrac->setSingleStep(0.05); spRailFrac->setDecimals(2); spRailFrac->setValue(0.70);
+    auto* spDoorGapPx   = new QDoubleSpinBox; spDoorGapPx->setRange(0.0, 80.0);  spDoorGapPx->setDecimals(0); spDoorGapPx->setValue(18.0);
+    auto* spMinStrong   = new QSpinBox;       spMinStrong->setRange(0, 4);       spMinStrong->setValue(3);
+
+    form->addRow(tr("<b>Geometry</b>"), new QLabel);
+    form->addRow(tr("Weld tolerance (px):"), spWeldTolPx);
+    form->addRow(tr("Axis snap (deg):"),     spAxisSnapDeg);
+    form->addRow(tr("Min area (m²):"),       spMinAreaM2);
+    form->addRow(tr("Min side (px):"),       spMinSidePx);
+    form->addRow(tr("Min wall segment (px):"), spMinWallPx);
+
+    form->addRow(tr("<b>Wall coverage</b>"), new QLabel);
+    form->addRow(tr("Strong coverage fraction:"), spRailFrac);
+    form->addRow(tr("Max door gap (px):"),       spDoorGapPx);
+    form->addRow(tr("Min strong sides (0–4):"),  spMinStrong);
+
+    auto* btns = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, &dlg);
+
+    auto* vbox = new QVBoxLayout;
+    vbox->addLayout(form);
+    vbox->addWidget(btns);
+    dlg.setLayout(vbox);
+
+    // Live preview sender
+    auto sendParams = [this,
+                       spWeldTolPx, spMinAreaM2, spAxisSnapDeg,
+                       spMinSidePx, spMinWallPx, spRailFrac, spDoorGapPx, spMinStrong]()
+    {
+        m_canvas->updateRoomsPreview(
+            /*weldTolPx*/      spWeldTolPx->value(),
+            /*minArea_m2*/     spMinAreaM2->value(),
+            /*axisSnapDeg*/    spAxisSnapDeg->value(),
+            /*minSidePx*/      spMinSidePx->value(),
+            /*minWallSegLen*/  spMinWallPx->value(),
+            /*railCoverFrac*/  spRailFrac->value(),
+            /*doorGapMaxPx*/   spDoorGapPx->value(),
+            /*minStrongSides*/ spMinStrong->value()
+        );
+    };
+
+    // ---- FIXED: typed connections (no const char* + lambda mix) ----
+    auto connectD = [&](QDoubleSpinBox* sp){
+        QObject::connect(sp,
+            static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
+            &dlg, [sendParams](double){ sendParams(); });
+    };
+    auto connectI = [&](QSpinBox* sp){
+        QObject::connect(sp,
+            static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+            &dlg, [sendParams](int){ sendParams(); });
+    };
+
+    connectD(spWeldTolPx);
+    connectD(spAxisSnapDeg);
+    connectD(spMinAreaM2);
+    connectD(spMinSidePx);
+    connectD(spMinWallPx);
+    connectD(spRailFrac);
+    connectD(spDoorGapPx);
+    connectI(spMinStrong);
+
+    // Apply commits shapes to the scene; keep dialog open to iterate
+    QObject::connect(btns->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dlg, [this]{
+        if (!m_canvas) return;
+        const int added = m_canvas->applyRoomsPreview();
+        if (statusBar()) statusBar()->showMessage(tr("Auto-rooms: %1 room(s) added").arg(added), 3000);
+    });
+
+    // Close stops preview
+    QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::accept);
+
+    // Kick off initial preview
+    sendParams();
+
+    dlg.exec();
+
+    // Ensure overlay removed when dialog closes (if user didn't Apply last)
+    if (m_canvas) m_canvas->cancelRoomsPreview();
 }
