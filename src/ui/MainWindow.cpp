@@ -391,6 +391,8 @@ void MainWindow::setupMenus()
         constexpr double kWallT = 0.12;
         win->buildFromCanvas(m_canvas, kWallH, kWallT, /*includeFloor*/true);
     });
+
+    
     connect(act3D, &QAction::triggered, this, &MainWindow::open3DPreview);
     view->addAction("Zoom In",    QKeySequence::ZoomIn,  this, &MainWindow::zoomIn);
     view->addAction("Zoom Out",   QKeySequence::ZoomOut, this, &MainWindow::zoomOut);
@@ -406,6 +408,30 @@ void MainWindow::setupMenus()
     ai->addAction("Refine Vector (light overlaps)…",
                   QKeySequence("Ctrl+Shift+L"),
                   this, &MainWindow::refineOverlapsLight);
+
+    // In MainWindow::setupMenus()
+    auto* view3dAct = ai->addAction(tr("Open 3D Preview…")); // or put under View menu
+    connect(view3dAct, &QAction::triggered, this, [this]{
+        bool okH=false, okT=false;
+        double h = QInputDialog::getDouble(this, tr("Wall height (m)"), tr("Height:"), 3.0, 0.5, 100.0, 2, &okH);
+        if (!okH) return;
+        double t = QInputDialog::getDouble(this, tr("Wall thickness (m)"), tr("Thickness:"), 0.15, 0.01, 2.0, 3, &okT);
+        if (!okT) return;
+
+        if (!m_scene3d) {
+            m_scene3d = new Scene3DView;
+            m_scene3d->setAttribute(Qt::WA_DeleteOnClose, true);
+            // keep pointer safe if user closes the window
+            connect(m_scene3d, &QObject::destroyed, this, [this]{ m_scene3d = nullptr; });
+        }
+
+        m_scene3d->buildFromCanvas(m_canvas, h, t, /*includeFloor*/true);
+        m_scene3d->resize(900, 600);
+        m_scene3d->show();
+        m_scene3d->raise();
+        m_scene3d->activateWindow();
+    });
+
 
     // Refine (Preview)… dialog
     QAction* actRefinePreview = ai->addAction("Refine (Preview)...");

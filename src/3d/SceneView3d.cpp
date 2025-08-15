@@ -238,22 +238,60 @@ void Scene3DView::buildFromCanvas(const DrawingCanvas* canvas,
     }
 
     // ====== WALLS: from QGraphicsLineItem (visible & unlocked only) ======
-    for (QGraphicsItem* it : canvas->scene()->items()) {
-        if (!it->isVisible()) continue;
+    // ====== WALLS: from *all* primitives (visible & unlocked only) ======
+for (QGraphicsItem* it : canvas->scene()->items()) {
+    if (!it->isVisible()) continue;
 
-        const int layerId = it->data(0).toInt();
-        if (!canvas->isLayerVisible(layerId) || canvas->isLayerLocked(layerId))
-            continue;
+    const int layerId = it->data(0).toInt();
+    if (!canvas->isLayerVisible(layerId) || canvas->isLayerLocked(layerId))
+        continue;
 
-        if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
-            const QLineF L = ln->line();
-            const QPointF p1s = ln->mapToScene(L.p1());
-            const QPointF p2s = ln->mapToScene(L.p2());
-            addWall(p1s, p2s,
-                    wallHeightMeters, wallThicknessMeters,
-                    px_to_m, origin_px, m_content);
-        }
+    if (auto* ln = qgraphicsitem_cast<QGraphicsLineItem*>(it)) {
+        const QLineF L = ln->line();
+        const QPointF p1s = ln->mapToScene(L.p1());
+        const QPointF p2s = ln->mapToScene(L.p2());
+        addWall(p1s, p2s, wallHeightMeters, wallThicknessMeters, px_to_m, origin_px, m_content);
+        continue;
     }
+
+    if (auto* rc = qgraphicsitem_cast<QGraphicsRectItem*>(it)) {
+        QPolygonF poly = rc->mapToScene(QPolygonF(rc->rect()));
+        for (int i=0; i<poly.size(); ++i) {
+            const QPointF a = poly[i];
+            const QPointF b = poly[(i+1) % poly.size()];
+            addWall(a, b, wallHeightMeters, wallThicknessMeters, px_to_m, origin_px, m_content);
+        }
+        continue;
+    }
+
+    if (auto* pg = qgraphicsitem_cast<QGraphicsPolygonItem*>(it)) {
+        QPolygonF poly = pg->mapToScene(pg->polygon());
+        if (poly.size() >= 2) {
+            for (int i=0; i<poly.size(); ++i) {
+                const QPointF a = poly[i];
+                const QPointF b = poly[(i+1) % poly.size()];
+                addWall(a, b, wallHeightMeters, wallThicknessMeters, px_to_m, origin_px, m_content);
+            }
+        }
+        continue;
+    }
+
+    if (auto* pth = qgraphicsitem_cast<QGraphicsPathItem*>(it)) {
+        // Convert scene-mapped path into polygons, then extrude each edge
+        const QPainterPath scenePath = pth->mapToScene(pth->path());
+        const auto polys = scenePath.toSubpathPolygons(); // already in scene coords
+        for (const QPolygonF& lp : polys) {
+            if (lp.size() < 2) continue;
+            for (int i=0; i<lp.size(); ++i) {
+                const QPointF a = lp[i];
+                const QPointF b = lp[(i+1) % lp.size()];
+                addWall(a, b, wallHeightMeters, wallThicknessMeters, px_to_m, origin_px, m_content);
+            }
+        }
+        continue;
+    }
+}
+
 
     // reframe camera to bounds
     auto* cam = m_view->camera();

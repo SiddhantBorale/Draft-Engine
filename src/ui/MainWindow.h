@@ -13,6 +13,7 @@ class QTreeWidgetItem;
 class QDoubleSpinBox;
 class QPushButton;
 class QNetworkReply;
+class Scene3DView;
 
 class MainWindow : public QMainWindow
 {
@@ -92,4 +93,7 @@ private:
 
     QDockWidget* m_3dDock = nullptr;
     class Scene3DView* m_3dView = nullptr;
+
+    Scene3DView*           m_scene3d { nullptr };
 };
+
