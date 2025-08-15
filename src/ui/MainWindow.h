@@ -26,6 +26,8 @@ protected:
 private slots:
     void applyCornerRadius();   // NEW
     void applyLineBend();
+    void open3DPreview();
+
 
     // toolbar/menu actions
     void promptForProjectUnits();
@@ -87,4 +89,7 @@ private:
 
     QTreeWidget*            m_layerTree { nullptr };
     int                     m_nextLayerId { 1 }; // 0 already exists
+
+    QDockWidget* m_3dDock = nullptr;
+    class Scene3DView* m_3dView = nullptr;
 };

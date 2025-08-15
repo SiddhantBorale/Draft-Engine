@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "canvas/DrawingCanvas.h"
 #include "ui/RulerWidget.h"
+#include "3d/SceneView3d.h"
 
 #include <QtWidgets>
 #include <QShortcut>
@@ -376,6 +377,21 @@ void MainWindow::setupMenus()
 
     // View (Zoom)
     auto* view = menuBar()->addMenu("&View");
+// ...
+    // QAction* act3D = view->addAction(tr("Open 3D Preview"));
+    auto* act3D = view->addAction(tr("Open 3D View…"));
+    connect(act3D, &QAction::triggered, this, [this]{
+        auto* win = new Scene3DView(this);
+        win->setAttribute(Qt::WA_DeleteOnClose);
+        win->resize(900, 700);
+        win->show();
+
+        // tweak if you like (meters):
+        constexpr double kWallH = 2.7;
+        constexpr double kWallT = 0.12;
+        win->buildFromCanvas(m_canvas, kWallH, kWallT, /*includeFloor*/true);
+    });
+    connect(act3D, &QAction::triggered, this, &MainWindow::open3DPreview);
     view->addAction("Zoom In",    QKeySequence::ZoomIn,  this, &MainWindow::zoomIn);
     view->addAction("Zoom Out",   QKeySequence::ZoomOut, this, &MainWindow::zoomOut);
     view->addAction("Reset Zoom", QKeySequence("Ctrl+0"), this, &MainWindow::zoomReset);
@@ -916,4 +932,22 @@ void MainWindow::openAutoRoomsDialog()
 
     // Ensure overlay removed when dialog closes (if user didn't Apply last)
     if (m_canvas) m_canvas->cancelRoomsPreview();
+}
+
+
+void MainWindow::open3DPreview()
+{
+    if (!m_3dDock) {
+        m_3dDock = new QDockWidget(tr("3D Preview"), this);
+        m_3dDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        m_3dView = new Scene3DView(m_3dDock);
+        m_3dDock->setWidget(m_3dView);
+        addDockWidget(Qt::RightDockWidgetArea, m_3dDock);
+    }
+    if (m_canvas && m_3dView) {
+        // tweak thickness/height to taste (meters)
+        m_3dView->buildFromCanvas(m_canvas, /*thick*/0.12, /*height*/2.7, /*floor*/true);
+    }
+    m_3dDock->show();
+    m_3dDock->raise();
 }

@@ -78,6 +78,22 @@ public:
     void   setScalePxPerUnit(double pxPerUnit);
     double pxPerUnit() const { return m_pxPerUnit; }
 
+     static double unitToMeters(Unit u) {
+        switch (u) {
+        case Unit::Millimeter: return 0.001;
+        case Unit::Centimeter: return 0.01;
+        case Unit::Meter:      return 1.0;
+        case Unit::Inch:       return 0.0254;
+        case Unit::Foot:       return 0.3048;
+        }
+        return 1.0;
+    }
+
+    double pxToMeters(double px) const {
+        const double u_m = unitToMeters(m_projectUnit);
+        return (px / std::max(1e-9, m_pxPerUnit)) * u_m;
+    }
+
     // conversions
     double toProjectUnitsPx(double px) const { return px / m_pxPerUnit; }
     double toPxFromProjectUnits(double u) const { return u * m_pxPerUnit; }
