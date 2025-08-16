@@ -410,27 +410,48 @@ void MainWindow::setupMenus()
                   this, &MainWindow::refineOverlapsLight);
 
     // In MainWindow::setupMenus()
-    auto* view3dAct = ai->addAction(tr("Open 3D Preview…")); // or put under View menu
-    connect(view3dAct, &QAction::triggered, this, [this]{
-        bool okH=false, okT=false;
-        double h = QInputDialog::getDouble(this, tr("Wall height (m)"), tr("Height:"), 3.0, 0.5, 100.0, 2, &okH);
-        if (!okH) return;
-        double t = QInputDialog::getDouble(this, tr("Wall thickness (m)"), tr("Thickness:"), 0.15, 0.01, 2.0, 3, &okT);
-        if (!okT) return;
-
+    // View menu additions
+    auto* view3d = view->addMenu(("3D View"));
+    auto* actShow3D = view3d->addAction(tr("Open 3D Preview"));
+    actShow3D->setShortcut(QKeySequence("Ctrl+\\"));
+    connect(actShow3D, &QAction::triggered, this, [this]{
         if (!m_scene3d) {
             m_scene3d = new Scene3DView;
             m_scene3d->setAttribute(Qt::WA_DeleteOnClose, true);
-            // keep pointer safe if user closes the window
             connect(m_scene3d, &QObject::destroyed, this, [this]{ m_scene3d = nullptr; });
+            m_scene3d->connectCanvas(m_canvas); // follow 2D view
         }
-
-        m_scene3d->buildFromCanvas(m_canvas, h, t, /*includeFloor*/true);
-        m_scene3d->resize(900, 600);
+        // Example defaults (change UI as you like)
+        const double H = 3.0;      // meters
+        const double T = 0.15;     // meters
+        m_scene3d->buildFromCanvas(m_canvas, H, T, /*includeFloor*/true);
+        m_scene3d->resize(1100, 800);
         m_scene3d->show();
-        m_scene3d->raise();
-        m_scene3d->activateWindow();
     });
+
+    // Blender-ish camera hotkeys
+    auto* actTop    = view3d->addAction(tr("Top (Ortho) [7]"));
+    actTop->setShortcut(QKeySequence("Ctrl+7"));
+    connect(actTop, &QAction::triggered, this, [this]{ if (m_scene3d) m_scene3d->setMode(Scene3DView::ViewMode::OrthoTop); });
+
+    auto* actFront  = view3d->addAction(tr("Front (Ortho) [1]"));
+    actFront->setShortcut(QKeySequence("Ctrl+1"));
+    connect(actFront, &QAction::triggered, this, [this]{ if (m_scene3d) m_scene3d->setMode(Scene3DView::ViewMode::OrthoFront); });
+
+    auto* actRight  = view3d->addAction(tr("Right (Ortho) [3]"));
+    actRight->setShortcut(QKeySequence("Ctrl+3"));
+    connect(actRight, &QAction::triggered, this, [this]{ if (m_scene3d) m_scene3d->setMode(Scene3DView::ViewMode::OrthoRight); });
+
+    auto* actPersp  = view3d->addAction(tr("Perspective [5]"));
+    actPersp->setShortcut(QKeySequence("Ctrl+5"));
+    connect(actPersp, &QAction::triggered, this, [this]{ if (m_scene3d) m_scene3d->setMode(Scene3DView::ViewMode::Perspective); });
+
+    // Sync toggle
+    auto* actSync = view3d->addAction(tr("Sync with 2D (Top)"));
+    actSync->setCheckable(true);
+    actSync->setChecked(true);
+    connect(actSync, &QAction::toggled, this, [this](bool on){ if (m_scene3d) m_scene3d->setSync2D(on); });
+
 
 
     // Refine (Preview)… dialog

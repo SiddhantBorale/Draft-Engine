@@ -1,13 +1,11 @@
 #pragma once
 #include <QWidget>
-#include <QRectF>
-#include <QPointF>
-
-namespace Qt3DCore { class QEntity; class QTransform; }
-namespace Qt3DRender { class QCamera; class QDirectionalLight; }
-namespace Qt3DExtras { class Qt3DWindow; class QPhongMaterial; class QCuboidMesh; class QPlaneMesh; }
+#include <QPointer>
 
 class DrawingCanvas;
+
+namespace Qt3DCore { class QEntity; class QTransform; }
+namespace Qt3DExtras { class Qt3DWindow; class QOrbitCameraController; class QPhongMaterial; }
 
 class Scene3DView : public QWidget
 {
@@ -16,39 +14,59 @@ public:
     explicit Scene3DView(QWidget* parent = nullptr);
     ~Scene3DView() override;
 
-    // Build 3D scene from the current 2D canvas lines (walls)
+    // Build 3D scene from the 2D canvas
     void buildFromCanvas(const DrawingCanvas* canvas,
-                         double wallHeightMeters = 3.0,
-                         double wallThicknessMeters = 0.15,
-                         bool includeFloor = true);
+                         double wallHeightM,
+                         double wallThicknessM,
+                         bool includeFloor);
 
-    void clearScene();
+    // Camera/view modes (Blender-ish)
+    enum class ViewMode { OrthoTop, OrthoFront, OrthoRight, Perspective };
+    void setMode(ViewMode m);
+    void setTopOrtho();
+    void setFrontOrtho();
+    void setRightOrtho();
+    void setPerspective();
+    void toggleOrthoPerspective();
+
+    // Sync top-ortho with 2D canvas
+    void setSync2D(bool on);
+    bool sync2D() const { return m_sync2D; }
+    void connectCanvas(DrawingCanvas* canvas);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
     void resizeEvent(QResizeEvent* e) override;
-    void showEvent(QShowEvent* e) override;
 
 private:
     void ensureNonZeroSize();
+    void syncCameraTo2D();
 
-    Qt3DCore::QEntity* addWall(const QPointF& a_px,
-                               const QPointF& b_px,
-                               double height_m,
-                               double thick_m,
-                               double px_to_m,
-                               const QPointF& origin_px,
-                               Qt3DCore::QEntity* parent);
+    // Camera presets
+    void applyTopOrtho(float widthMeters);
+    void applyFrontOrtho(float widthMeters);
+    void applyRightOrtho(float widthMeters);
+    void applyPerspectiveDefault();
 
-    Qt3DCore::QEntity* addFloor(const QRectF& bounds_px,
-                                double thick_m,
-                                double px_to_m,
-                                const QPointF& origin_px,
-                                Qt3DCore::QEntity* parent);
+    // Build helpers
+    void clearGeometry();
+    void addWallFromSegment(const QPointF& aPx,
+                            const QPointF& bPx,
+                            double pxToM,
+                            double wallHeightM,
+                            double wallThicknessM);
+    void addFloorQuad(const QRectF& boundsPx, double pxToM);
+
+    void frameCameraToBounds(const QRectF& boundsPx, double pxToM);
 
 private:
-    Qt3DExtras::Qt3DWindow* m_view = nullptr;  // the Qt3D window
-    QWidget*                m_container = nullptr; // widget wrapper for m_view
-    Qt3DCore::QEntity*      m_root = nullptr;  // persistent root
-    Qt3DCore::QEntity*      m_content = nullptr; // current content subtree
+    Qt3DExtras::Qt3DWindow*              m_view       { nullptr };
+    QWidget*                             m_container  { nullptr };
+    Qt3DCore::QEntity*                   m_root       { nullptr }; // scene root (kept)
+    Qt3DCore::QEntity*                   m_geomRoot   { nullptr }; // regenerated geometry
+    Qt3DExtras::QOrbitCameraController*  m_orbit      { nullptr };
+
+    ViewMode                             m_mode       { ViewMode::Perspective };
+    bool                                 m_sync2D     { true };
+    QPointer<DrawingCanvas>              m_canvas;
 };
