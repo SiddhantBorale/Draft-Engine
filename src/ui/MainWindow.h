@@ -1,40 +1,35 @@
 #pragma once
+
 #include <QMainWindow>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include <QStackedWidget>
 #include <QDoubleSpinBox>
+#include <QTreeWidget>
+
+// We must include the real header to use Scene3DView::ViewMode in declarations
+#include "3d/SceneView3d.h"
 
 class DrawingCanvas;
-class QNetworkAccessManager;
 class QUndoStack;
-class QListWidget;
-class QTreeWidget;
+class QNetworkAccessManager;
 class QTreeWidgetItem;
-class QDoubleSpinBox;
-class QPushButton;
-class QNetworkReply;
-class Scene3DView;
+class QAction;
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override = default;
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private slots:
-    void applyCornerRadius();   // NEW
-    void applyLineBend();
-    void open3DPreview();
-
-
-    // toolbar/menu actions
+    /* Toolbar / actions */
     void promptForProjectUnits();
     void setScaleInteractive();
     void setDimPrecision(int p);
-    void changeFillPattern(int idx); 
+    void changeFillPattern(int idx);
     void chooseColor();
     void chooseFillColor();
     void changeLineWidth(double w);
@@ -45,55 +40,65 @@ private slots:
     void importSvg();
     void exportSvg();
     void runBluePrintAI();
-    void onVectoriseFinished(); 
+    void onVectoriseFinished();
     void changeCornerRadius(double r);
 
-    // Zoom
+    /* Zoom */
     void zoomIn();
     void zoomOut();
     void zoomReset();
     void zoomToFit();
 
-    // Edit (Undo/Redo)
+    /* Edit */
     void undo();
     void redo();
 
-    // Layers (list-based)
+    /* Layers */
     void addLayer();
     void removeSelectedLayer();
     void setCurrentLayerFromTree(QTreeWidgetItem* it, QTreeWidgetItem* prev);
     void layerItemChanged(QTreeWidgetItem* it, int column);
 
-    void refineVector();  // auto-clean pass
-    void refineOverlapsLight();  // new
+    /* Vector refine + rooms */
+    void refineVector();
+    void refineOverlapsLight();
     void openAutoRoomsDialog();
 
+    /* View switching */
+    void switchTo2D();
+    void switch3DTop();
+    void switch3DFront();
+    void switch3DRight();
+    void switch3DPerspective();
+
+    void applyCornerRadius();
+    void applyLineBend();
+
 private:
-
-    QAction* m_actSetScale { nullptr };
-
-    // UI builders
-    QDoubleSpinBox* m_cornerSpin { nullptr }; // NEW
-    QDoubleSpinBox* m_bendSpin   { nullptr }; // NEW
-
+    /* UI builders */
     void setupCentralWithRulers();
     void setupToolPanel();
     void setupMenus();
     void setupLayersDock();
+    
 
-    DrawingCanvas*          m_canvas { nullptr };
-    QNetworkAccessManager*  m_net    { nullptr };
-    QUndoStack*             m_undo   { nullptr };
+    /* 3D helpers (embedded in the same central area) */
+    void prepare3D(Scene3DView::ViewMode mode);
 
-    // QListWidget*            m_layerList { nullptr };
-    // int                     m_nextLayerId { 1 };
+    /* Data */
+    DrawingCanvas*         m_canvas  = nullptr;
+    Scene3DView*           m_scene3d = nullptr;
+    QStackedWidget*        m_viewStack = nullptr; // [0] 2D canvas, [1] 3D view
 
-    QTreeWidget*            m_layerTree { nullptr };
-    int                     m_nextLayerId { 1 }; // 0 already exists
+    QUndoStack*            m_undo = nullptr;
+    QNetworkAccessManager* m_net  = nullptr;
 
-    QDockWidget* m_3dDock = nullptr;
-    class Scene3DView* m_3dView = nullptr;
+    QTreeWidget*           m_layerTree = nullptr;
+    int                    m_nextLayerId = 1;   // Layer 0 is seeded
 
-    Scene3DView*           m_scene3d { nullptr };
+    QAction*               m_actSetScale = nullptr;
+
+    /* Small editors in the Tools panel */
+    QDoubleSpinBox*        m_cornerSpin = nullptr;
+    QDoubleSpinBox*        m_bendSpin   = nullptr;
 };
-
